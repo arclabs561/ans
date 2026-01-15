@@ -1,0 +1,23 @@
+[package]
+name = "ans"
+version = "0.1.0"
+authors = ["Arc <attobop@gmail.com>"]
+edition = "2021"
+description = "Asymmetric Numeral Systems: near-optimal entropy coding primitives."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/arclabs561/ans"
+readme = "README.md"
+keywords = ["ans", "entropy-coding", "compression"]
+categories = ["compression", "algorithms"]
+
+[dependencies]
+# Core
+thiserror = "2.0"
+
+[dev-dependencies]
+proptest = "1.5"
+criterion = "0.5"
+
+[[bench]]
+name = "rans_bench"
+harness = false
