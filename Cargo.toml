@@ -5,7 +5,8 @@ authors = ["Arc <attobop@gmail.com>"]
 edition = "2021"
 description = "Asymmetric Numeral Systems: near-optimal entropy coding primitives."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/arclabs561/ans"
+repository = "https://github.com/arclabs561/tekne"
+documentation = "https://docs.rs/ans"
 readme = "README.md"
 keywords = ["ans", "entropy-coding", "compression"]
 categories = ["compression", "algorithms"]
@@ -18,6 +19,6 @@ thiserror = "2.0"
 proptest = "1.5"
 criterion = "0.5"
 
-[[bench]]
-name = "rans_bench"
-harness = false
+# [[bench]]
+# name = "rans_bench"
+# harness = false
