@@ -110,10 +110,8 @@ impl FrequencyTable {
                 // subtract one from a symbol with freq > 1 (prefer largest freq)
                 let mut best: Option<(usize, u32)> = None;
                 for (i, &f) in freqs.iter().enumerate() {
-                    if f > 1 {
-                        if best.map(|(_, bf)| f > bf).unwrap_or(true) {
-                            best = Some((i, f));
-                        }
+                    if f > 1 && best.map(|(_, bf)| f > bf).unwrap_or(true) {
+                        best = Some((i, f));
                     }
                 }
                 let Some((idx, _)) = best else {
@@ -143,8 +141,8 @@ impl FrequencyTable {
         for (sym, &_f) in freqs.iter().enumerate() {
             let start = cdf[sym] as usize;
             let end = cdf[sym + 1] as usize;
-            for slot in start..end {
-                sym_by_slot[slot] = sym as u32;
+            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
+                *slot = sym as u32;
             }
         }
 
