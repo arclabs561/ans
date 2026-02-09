@@ -238,7 +238,10 @@ pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u3
     let mut cursor = bytes.len();
     // Pop final state
     cursor -= 4;
-    let mut state = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
+    let state_bytes: [u8; 4] = bytes[cursor..cursor + 4]
+        .try_into()
+        .map_err(|_| AnsError::TruncatedInput)?;
+    let mut state = u32::from_le_bytes(state_bytes);
     if state < RANS_L {
         // For a valid stream produced by `encode`, the final state should always be >= RANS_L.
         // Treat smaller states as corruption (often truncation, but not necessarily).
