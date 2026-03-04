@@ -1,5 +1,9 @@
 # ans
 
+[![crates.io](https://img.shields.io/crates/v/ans.svg)](https://crates.io/crates/ans)
+[![Documentation](https://docs.rs/ans/badge.svg)](https://docs.rs/ans)
+[![CI](https://github.com/arclabs561/ans/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/ans/actions/workflows/ci.yml)
+
 Asymmetric Numeral Systems (rANS) entropy coding primitives.
 
 This crate provides a small, dependency-light implementation of byte-oriented rANS.
