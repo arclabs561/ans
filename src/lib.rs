@@ -9,6 +9,22 @@
 //! - **Small surface**: encode/decode with a [`FrequencyTable`].
 //! - **No I/O**: this crate is pure in-memory coding.
 //!
+//! ## Example
+//!
+//! ```
+//! use ans::{decode, encode, FrequencyTable};
+//!
+//! let counts = [10u32, 20, 70]; // A, B, C
+//! let table = FrequencyTable::from_counts(&counts, 14)?;
+//! let message = [0u32, 2, 1, 2, 2, 0];
+//!
+//! let bytes = encode(&message, &table)?;
+//! let back = decode(&bytes, &table, message.len())?;
+//! assert_eq!(back, message);
+//!
+//! # Ok::<(), ans::AnsError>(())
+//! ```
+//!
 //! ## Notes
 //! - This is not tuned for maximum speed; it is meant to be correct and easy to integrate.
 //! - Encoding returns a byte vector in a **stack format**: the decoder consumes bytes from
@@ -16,27 +32,39 @@
 
 use thiserror::Error;
 
+/// Lower bound for the rANS state. Encoding emits bytes to keep the state
+/// below `RANS_L << 8`; decoding pulls bytes to bring the state back above
+/// `RANS_L`.
+const RANS_L: u32 = 1 << 23;
+
 /// Errors for rANS operations.
 #[derive(Debug, Error)]
 pub enum AnsError {
+    /// `precision_bits` was outside the valid range `1..=20`.
     #[error("invalid precision_bits={precision_bits} (must be in 1..=20)")]
     InvalidPrecision { precision_bits: u32 },
 
+    /// The counts slice passed to [`FrequencyTable::from_counts`] was empty.
     #[error("empty frequency table")]
     EmptyAlphabet,
 
+    /// A symbol index exceeded the alphabet size during encoding.
     #[error("invalid symbol {symbol} for alphabet size {alphabet_size}")]
     InvalidSymbol { symbol: u32, alphabet_size: usize },
 
+    /// A symbol with zero frequency was encountered during encoding.
     #[error("frequency for symbol {symbol} is zero")]
     ZeroFrequency { symbol: u32 },
 
+    /// The frequency normalization step could not produce a valid table.
     #[error("frequency table normalization failed: {0}")]
     InvalidTable(String),
 
+    /// The rANS state read from the byte stream was below `RANS_L`.
     #[error("invalid rANS state {state} (expected >= {min_state})")]
     InvalidState { state: u32, min_state: u32 },
 
+    /// The byte stream was shorter than expected during decoding.
     #[error("truncated input")]
     TruncatedInput,
 }
@@ -138,7 +166,7 @@ impl FrequencyTable {
         }
 
         let mut sym_by_slot = vec![0u32; total as usize];
-        for (sym, &_f) in freqs.iter().enumerate() {
+        for sym in 0..freqs.len() {
             let start = cdf[sym] as usize;
             let end = cdf[sym + 1] as usize;
             for slot in sym_by_slot.iter_mut().take(end).skip(start) {
@@ -155,26 +183,31 @@ impl FrequencyTable {
         })
     }
 
+    /// The number of precision bits, i.e. `log2(total)`.
     #[inline]
     pub fn precision_bits(&self) -> u32 {
         self.precision_bits
     }
 
+    /// Total frequency mass: `2^precision_bits`.
     #[inline]
     pub fn total(&self) -> u32 {
         self.total
     }
 
+    /// Number of symbols in the alphabet.
     #[inline]
     pub fn alphabet_size(&self) -> usize {
         self.freqs.len()
     }
 
+    /// Normalized frequency for `sym`, or `None` if out of range.
     #[inline]
     pub fn freq(&self, sym: u32) -> Option<u32> {
         self.freqs.get(sym as usize).copied()
     }
 
+    /// Cumulative frequency (CDF value) for `sym`, or `None` if out of range.
     #[inline]
     pub fn cum_freq(&self, sym: u32) -> Option<u32> {
         self.cdf.get(sym as usize).copied()
@@ -185,8 +218,6 @@ impl FrequencyTable {
 ///
 /// Output is a byte vector treated as a stack: decoding consumes bytes from the end.
 pub fn encode(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsError> {
-    // Standard byte-based rANS.
-    const RANS_L: u32 = 1 << 23;
     let mask = table.total - 1;
     debug_assert!(table.total.is_power_of_two());
 
@@ -229,7 +260,6 @@ pub fn encode(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsErr
 
 /// Decode an rANS stream produced by [`encode`].
 pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u32>, AnsError> {
-    const RANS_L: u32 = 1 << 23;
     if bytes.len() < 4 {
         return Err(AnsError::TruncatedInput);
     }
@@ -307,15 +337,67 @@ mod tests {
         assert!(matches!(err, AnsError::InvalidState { .. }));
     }
 
+    #[test]
+    fn roundtrip_single_symbol_alphabet() {
+        let counts = [42u32];
+        let table = FrequencyTable::from_counts(&counts, 10).unwrap();
+        let symbols = vec![0u32; 50];
+        let enc = encode(&symbols, &table).unwrap();
+        let dec = decode(&enc, &table, symbols.len()).unwrap();
+        assert_eq!(symbols, dec);
+    }
+
+    #[test]
+    fn roundtrip_empty_message() {
+        let counts = [5u32, 3, 2];
+        let table = FrequencyTable::from_counts(&counts, 12).unwrap();
+        let symbols: Vec<u32> = vec![];
+        let enc = encode(&symbols, &table).unwrap();
+        let dec = decode(&enc, &table, 0).unwrap();
+        assert_eq!(symbols, dec);
+    }
+
+    #[test]
+    fn roundtrip_precision_boundaries() {
+        for prec in [1, 2, 19, 20] {
+            let counts = [3u32, 7];
+            let table = FrequencyTable::from_counts(&counts, prec).unwrap();
+            let symbols = vec![0u32, 1, 1, 0, 1];
+            let enc = encode(&symbols, &table).unwrap();
+            let dec = decode(&enc, &table, symbols.len()).unwrap();
+            assert_eq!(symbols, dec, "failed at precision_bits={prec}");
+        }
+    }
+
+    #[test]
+    fn errors_on_invalid_precision() {
+        assert!(FrequencyTable::from_counts(&[1], 0).is_err());
+        assert!(FrequencyTable::from_counts(&[1], 21).is_err());
+    }
+
+    #[test]
+    fn errors_on_empty_counts() {
+        assert!(FrequencyTable::from_counts(&[], 12).is_err());
+    }
+
+    #[test]
+    fn errors_on_all_zero_counts() {
+        assert!(FrequencyTable::from_counts(&[0, 0, 0], 12).is_err());
+    }
+
     proptest! {
         #[test]
         fn prop_rans_roundtrip(
-            precision_bits in 8u32..14,
+            precision_bits in 1u32..15,
             symbols in prop::collection::vec(0u32..256u32, 0..200),
             counts in prop::collection::vec(1u32..100u32, 1..32),
         ) {
             let alphabet = counts.len().max(1);
-            let table = FrequencyTable::from_counts(&counts, precision_bits)?;
+            // Skip when total < alphabet (e.g. precision_bits=1, 3 symbols).
+            let table = match FrequencyTable::from_counts(&counts, precision_bits) {
+                Ok(t) => t,
+                Err(_) => { return Ok(()); }
+            };
             let symbols: Vec<u32> = symbols.into_iter().map(|s| s % (alphabet as u32)).collect();
             let enc = encode(&symbols, &table)?;
             let dec = decode(&enc, &table, symbols.len())?;
