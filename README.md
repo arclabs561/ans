@@ -6,9 +6,9 @@
 
 Asymmetric Numeral Systems (rANS) entropy coding primitives.
 
-This crate provides a small, dependency-light implementation of byte-oriented rANS.
+Small, pure-Rust, `no_std`-capable rANS with both batch and streaming APIs.
 
-## Example
+## Batch API
 
 ```rust
 use ans::{decode, encode, FrequencyTable};
@@ -22,6 +22,59 @@ let back = decode(&bytes, &table, message.len())?;
 assert_eq!(back, message);
 
 # Ok::<(), ans::AnsError>(())
+```
+
+## Streaming API
+
+Symbol-at-a-time encoding/decoding. Required for bits-back coding (BB-ANS, ROC).
+
+```rust
+use ans::{RansEncoder, RansDecoder, FrequencyTable};
+
+let table = FrequencyTable::from_counts(&[3, 7], 12)?;
+let message = [0u32, 1, 1, 0, 1];
+
+// Encode in reverse order (rANS requirement).
+let mut enc = RansEncoder::new();
+for &sym in message.iter().rev() {
+    enc.put(sym, &table)?;
+}
+let bytes = enc.finish();
+
+// Decode in forward order.
+let mut dec = RansDecoder::new(&bytes)?;
+let mut decoded = Vec::new();
+for _ in 0..message.len() {
+    decoded.push(dec.get(&table)?);
+}
+assert_eq!(decoded, message);
+
+# Ok::<(), ans::AnsError>(())
+```
+
+### Bits-back primitives
+
+`RansDecoder::peek` and `RansDecoder::advance` allow inspecting the decoded slot
+before advancing state, which is the key operation for bits-back coding:
+
+```rust
+# use ans::{RansEncoder, RansDecoder, FrequencyTable};
+# let table = FrequencyTable::from_counts(&[3, 7], 12)?;
+# let bytes = ans::encode(&[0u32, 1], &table)?;
+let mut dec = RansDecoder::new(&bytes)?;
+let sym = dec.peek(&table);       // look at slot without advancing
+dec.advance(sym, &table)?;        // advance after external logic
+# Ok::<(), ans::AnsError>(())
+```
+
+## `no_std`
+
+This crate is `no_std` by default (requires `alloc`). The `std` feature is enabled
+by default for convenience but can be disabled:
+
+```toml
+[dependencies]
+ans = { version = "0.1.0", default-features = false }
 ```
 
 ## Notes

@@ -12,9 +12,12 @@ readme = "README.md"
 keywords = ["ans", "entropy-coding", "compression"]
 categories = ["compression", "algorithms"]
 
+[features]
+default = ["std"]
+std = ["thiserror/std"]
+
 [dependencies]
-# Core
-thiserror = "2.0"
+thiserror = { version = "2.0", default-features = false }
 
 [dev-dependencies]
 proptest = "1.5"

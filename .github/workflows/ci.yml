@@ -23,3 +23,5 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: check no_std
+        run: cargo check --no-default-features
