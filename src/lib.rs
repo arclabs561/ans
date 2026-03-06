@@ -155,9 +155,10 @@ impl FrequencyTable {
         let mut cur_sum: i64 = freqs.iter().map(|&f| f as i64).sum();
         let target: i64 = total as i64;
         if cur_sum == 0 {
-            return Err(AnsError::InvalidTable(
-                "normalization produced zero total".to_string(),
-            ));
+            return Err(AnsError::InvalidTable(format!(
+                "normalization produced zero total for {} symbols (precision_bits={precision_bits})",
+                counts.len()
+            )));
         }
 
         // We adjust greedily; correctness > optimality.
@@ -168,7 +169,11 @@ impl FrequencyTable {
                     .iter()
                     .enumerate()
                     .max_by_key(|&(_, &c)| c)
-                    .ok_or_else(|| AnsError::InvalidTable("empty counts".to_string()))?;
+                    .ok_or_else(|| {
+                        AnsError::InvalidTable(format!(
+                            "no symbols available to increment (cur_sum={cur_sum}, target={target})"
+                        ))
+                    })?;
                 freqs[idx] += 1;
                 cur_sum += 1;
             } else {
@@ -180,9 +185,11 @@ impl FrequencyTable {
                     }
                 }
                 let Some((idx, _)) = best else {
-                    return Err(AnsError::InvalidTable(
-                        "cannot reduce total without dropping some symbol to zero".to_string(),
-                    ));
+                    return Err(AnsError::InvalidTable(format!(
+                        "cannot reduce total (cur_sum={cur_sum}, target={target}): \
+                         all {} symbols have freq<=1",
+                        freqs.len()
+                    )));
                 };
                 freqs[idx] -= 1;
                 cur_sum -= 1;
@@ -420,6 +427,14 @@ impl<'a> RansDecoder<'a> {
     /// Returns the symbol whose frequency interval contains the current slot.
     /// Use with [`advance`](RansDecoder::advance) for bits-back coding, where the
     /// caller needs the slot value before deciding how to advance.
+    ///
+    /// # Validity
+    ///
+    /// The returned symbol is guaranteed to be in-range only when the decoder
+    /// state is valid, i.e. the decoder was just constructed via [`new`](Self::new)
+    /// or the most recent [`advance`](Self::advance) call succeeded. If `advance`
+    /// returned an error (truncated input), the state may be partially updated
+    /// and `peek` results are undefined.
     #[inline]
     #[must_use]
     pub fn peek(&self, table: &FrequencyTable) -> u32 {
@@ -437,9 +452,19 @@ impl<'a> RansDecoder<'a> {
         let mask = table.total - 1;
         let slot = self.state & mask;
         let sym_us = sym as usize;
+        if sym_us >= table.freqs.len() {
+            return Err(AnsError::InvalidSymbol {
+                symbol: sym,
+                alphabet_size: table.freqs.len(),
+            });
+        }
         let freq = table.freqs[sym_us];
         let start = table.cdf[sym_us];
 
+        // Arithmetic safety: freq <= total <= 2^20, and (state >> precision_bits)
+        // < 2^(32 - precision_bits) <= 2^31, so freq * (state >> precision_bits)
+        // fits in u32 (max ~2^20 * 2^11 = 2^31 before renorm pushes state down).
+        // (slot - start) < freq <= total, so the addition cannot overflow.
         self.state = freq * (self.state >> table.precision_bits) + (slot - start);
 
         // Renormalize: pull bytes while state < RANS_L.
@@ -475,9 +500,24 @@ impl<'a> RansDecoder<'a> {
 // Batch API (wrappers around streaming types)
 // ---------------------------------------------------------------------------
 
-/// Encode `symbols` with rANS using `table`.
+/// Encode `symbols` into a byte stream using rANS with the given frequency `table`.
 ///
-/// Output is a byte vector treated as a stack: decoding consumes bytes from the end.
+/// The output byte vector is in **stack format**: the final 4 bytes hold the rANS
+/// state, and any earlier bytes were emitted during renormalization. The decoder
+/// consumes these bytes LIFO (from the end toward the front).
+///
+/// # Example
+///
+/// ```
+/// use ans::{encode, decode, FrequencyTable};
+///
+/// let table = FrequencyTable::from_counts(&[3, 7], 12)?;
+/// let message = [0u32, 1, 1, 0];
+/// let bytes = encode(&message, &table)?;
+/// let recovered = decode(&bytes, &table, message.len())?;
+/// assert_eq!(recovered, message);
+/// # Ok::<(), ans::AnsError>(())
+/// ```
 pub fn encode(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsError> {
     let mut enc = RansEncoder::with_capacity(symbols.len());
     for &sym in symbols.iter().rev() {
@@ -486,7 +526,24 @@ pub fn encode(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsErr
     Ok(enc.finish())
 }
 
-/// Decode an rANS stream produced by [`encode`].
+/// Decode `len` symbols from an rANS byte stream produced by [`encode`].
+///
+/// The caller must know the message length because rANS is a stream codec with no
+/// built-in end-of-message marker. Passing `len = 0` is valid and returns an empty
+/// vector (the 4-byte state is still read and validated).
+///
+/// # Example
+///
+/// ```
+/// use ans::{encode, decode, FrequencyTable};
+///
+/// let table = FrequencyTable::from_counts(&[5, 3, 2], 14)?;
+/// let message = [2u32, 0, 1, 0, 2];
+/// let bytes = encode(&message, &table)?;
+/// let recovered = decode(&bytes, &table, message.len())?;
+/// assert_eq!(recovered, message);
+/// # Ok::<(), ans::AnsError>(())
+/// ```
 pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u32>, AnsError> {
     let mut dec = RansDecoder::new(bytes)?;
     let mut out = Vec::with_capacity(len);
@@ -729,6 +786,32 @@ mod tests {
         let mut enc = RansEncoder::new();
         let err = enc.put(3, &table).unwrap_err(); // alphabet size is 3, symbol 3 is OOB
         assert!(matches!(err, AnsError::InvalidSymbol { symbol: 3, .. }));
+    }
+
+    #[test]
+    fn batch_decode_zero_symbols() {
+        let table = FrequencyTable::from_counts(&[5, 3, 2], 12).unwrap();
+        // A valid 4-byte state (RANS_L in little-endian).
+        let bytes = RANS_L.to_le_bytes();
+        let result = decode(&bytes, &table, 0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn advance_rejects_invalid_symbol() {
+        let table = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let message = [0u32, 1];
+        let bytes = encode(&message, &table).unwrap();
+        let mut dec = RansDecoder::new(&bytes).unwrap();
+        // Symbol 2 is out of range for a 2-symbol alphabet.
+        let err = dec.advance(2, &table).unwrap_err();
+        assert!(matches!(
+            err,
+            AnsError::InvalidSymbol {
+                symbol: 2,
+                alphabet_size: 2
+            }
+        ));
     }
 
     #[test]
