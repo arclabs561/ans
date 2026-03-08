@@ -392,12 +392,13 @@ impl<'a> RansDecoder<'a> {
             });
         }
         let cursor = bytes.len() - 4;
-        let state_bytes: [u8; 4] = bytes[cursor..cursor + 4]
-            .try_into()
-            .map_err(|_| AnsError::TruncatedInput {
-                available: bytes.len(),
-                needed: 4,
-            })?;
+        let state_bytes: [u8; 4] =
+            bytes[cursor..cursor + 4]
+                .try_into()
+                .map_err(|_| AnsError::TruncatedInput {
+                    available: bytes.len(),
+                    needed: 4,
+                })?;
         let state = u32::from_le_bytes(state_bytes);
         if state < RANS_L {
             return Err(AnsError::InvalidState {
