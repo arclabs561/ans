@@ -74,7 +74,7 @@ by default for convenience but can be disabled:
 
 ```toml
 [dependencies]
-ans = { version = "0.1.0", default-features = false }
+ans = { version = "0.1.3", default-features = false }
 ```
 
 ## Notes
