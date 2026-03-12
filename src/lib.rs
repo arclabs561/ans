@@ -59,6 +59,7 @@
 //!   the end (LIFO). This avoids reversing buffers.
 
 #![no_std]
+#![warn(missing_docs)]
 extern crate alloc;
 
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
