@@ -4,9 +4,7 @@
 [![Documentation](https://docs.rs/ans/badge.svg)](https://docs.rs/ans)
 [![CI](https://github.com/arclabs561/ans/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/ans/actions/workflows/ci.yml)
 
-Asymmetric Numeral Systems (rANS) entropy coding primitives.
-
-Small, pure-Rust, `no_std`-capable rANS with both batch and streaming APIs.
+Asymmetric numeral systems entropy coding.
 
 ## Batch API
 
