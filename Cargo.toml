@@ -12,6 +12,8 @@ readme = "README.md"
 keywords = ["ans", "entropy-coding", "compression"]
 categories = ["compression", "algorithms"]
 
+[workspace]
+
 [features]
 default = ["std"]
 std = ["thiserror/std"]
