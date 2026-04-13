@@ -3,6 +3,7 @@ name = "ans"
 version = "0.3.0"
 authors = ["Arc <attobop@gmail.com>"]
 edition = "2021"
+rust-version = "1.81"
 description = "rANS entropy coding with bits-back primitives. no_std, zero dependencies."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arclabs561/ans"
