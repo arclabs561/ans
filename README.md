@@ -100,13 +100,7 @@ let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12)?;
 
 ## `no_std`
 
-This crate is `no_std` by default (requires `alloc`). The `std` feature is enabled
-by default for convenience but can be disabled:
-
-```toml
-[dependencies]
-ans = { version = "0.1.4", default-features = false }
-```
+This crate has zero dependencies and is `no_std`-compatible (requires `alloc`).
 
 ## Notes
 

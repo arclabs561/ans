@@ -63,7 +63,7 @@
 extern crate alloc;
 
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
-use thiserror::Error;
+use core::fmt;
 
 /// Lower bound for the rANS state. Encoding emits bytes to keep the state
 /// below `RANS_L << 8`; decoding pulls bytes to bring the state back above
@@ -71,21 +71,18 @@ use thiserror::Error;
 const RANS_L: u32 = 1 << 23;
 
 /// Errors for rANS operations.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum AnsError {
     /// `precision_bits` was outside the valid range `1..=20`.
-    #[error("invalid precision_bits={precision_bits} (must be in 1..=20)")]
     InvalidPrecision {
         /// The invalid precision value.
         precision_bits: u32,
     },
 
     /// The counts slice passed to [`FrequencyTable::from_counts`] was empty.
-    #[error("empty frequency table")]
     EmptyAlphabet,
 
     /// A symbol index exceeded the alphabet size during encoding.
-    #[error("invalid symbol {symbol} for alphabet size {alphabet_size}")]
     InvalidSymbol {
         /// The out-of-range symbol.
         symbol: u32,
@@ -94,18 +91,15 @@ pub enum AnsError {
     },
 
     /// A symbol with zero frequency was encountered during encoding.
-    #[error("frequency for symbol {symbol} is zero")]
     ZeroFrequency {
         /// The zero-frequency symbol.
         symbol: u32,
     },
 
     /// The frequency normalization step could not produce a valid table.
-    #[error("frequency table normalization failed: {0}")]
     InvalidTable(String),
 
     /// The rANS state read from the byte stream was below `RANS_L`.
-    #[error("invalid rANS state {state} (expected >= {min_state})")]
     InvalidState {
         /// The invalid state value.
         state: u32,
@@ -114,7 +108,6 @@ pub enum AnsError {
     },
 
     /// The byte stream was shorter than expected during decoding.
-    #[error("truncated input ({available} bytes available, need at least {needed})")]
     TruncatedInput {
         /// Bytes available.
         available: usize,
@@ -122,6 +115,42 @@ pub enum AnsError {
         needed: usize,
     },
 }
+
+impl fmt::Display for AnsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPrecision { precision_bits } => {
+                write!(
+                    f,
+                    "invalid precision_bits={precision_bits} (must be in 1..=20)"
+                )
+            }
+            Self::EmptyAlphabet => f.write_str("empty frequency table"),
+            Self::InvalidSymbol {
+                symbol,
+                alphabet_size,
+            } => write!(
+                f,
+                "invalid symbol {symbol} for alphabet size {alphabet_size}"
+            ),
+            Self::ZeroFrequency { symbol } => {
+                write!(f, "frequency for symbol {symbol} is zero")
+            }
+            Self::InvalidTable(msg) => write!(f, "frequency table normalization failed: {msg}"),
+            Self::InvalidState { state, min_state } => {
+                write!(f, "invalid rANS state {state} (expected >= {min_state})")
+            }
+            Self::TruncatedInput { available, needed } => {
+                write!(
+                    f,
+                    "truncated input ({available} bytes available, need at least {needed})"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for AnsError {}
 
 /// A frequency model for rANS with total \(T = 2^{precision\_bits}\).
 #[derive(Debug, Clone)]
@@ -322,7 +351,9 @@ impl FrequencyTable {
             .iter()
             .map(|&p| {
                 let p = (p.max(0.0)) as f64 / sum;
-                (p * scale).round().max(0.0) as u32
+                // Use (x + 0.5) as u32 instead of round() for no_std compatibility.
+                let v = p * scale;
+                (if v > 0.0 { v + 0.5 } else { 0.0 }) as u32
             })
             .collect();
 
@@ -749,6 +780,15 @@ mod tests {
     #[test]
     fn errors_on_all_zero_counts() {
         assert!(FrequencyTable::from_counts(&[0, 0, 0], 12).is_err());
+    }
+
+    #[test]
+    fn errors_when_precision_too_small_for_alphabet() {
+        // precision_bits=1 -> total=2, but 3 nonzero symbols each need freq>=1.
+        // The correction loop can't reduce cur_sum=3 to target=2 because
+        // all symbols have freq=1 (none > 1 to decrement).
+        let err = FrequencyTable::from_counts(&[1, 1, 1], 1).unwrap_err();
+        assert!(matches!(err, AnsError::InvalidTable(_)));
     }
 
     proptest! {
@@ -1240,20 +1280,19 @@ mod tests {
 
     #[test]
     fn compression_ratio_sanity() {
-        // Highly skewed: symbol 0 has 99% probability
+        // Highly skewed: symbol 0 has 99% probability.
+        // H(X) ~ 0.10 bits/sym -> 1000 symbols ~ 12.5 bytes theoretical.
         let counts = [990u32, 5, 3, 1, 1];
         let table = FrequencyTable::from_counts(&counts, 14).unwrap();
-        // Message dominated by symbol 0 should compress well
         let message: Vec<u32> = (0..1000)
             .map(|i| if i % 100 == 0 { 1 } else { 0 })
             .collect();
         let bytes = encode(&message, &table).unwrap();
-        // Should be much less than 1 byte per symbol
+        // Should be well under 100 bytes (< 0.8 bits/sym).
         assert!(
-            bytes.len() < message.len(),
-            "compressed {} bytes >= {} symbols",
-            bytes.len(),
-            message.len()
+            bytes.len() < 100,
+            "compressed {} bytes, expected < 100 for 99%-skewed distribution",
+            bytes.len()
         );
     }
 
