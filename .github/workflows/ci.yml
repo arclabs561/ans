@@ -25,3 +25,14 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: check no_std
         run: cargo check --no-default-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.81.0
+      - uses: Swatinem/rust-cache@v2
+      - name: check msrv
+        run: rm -f Cargo.lock && cargo check
+      - name: check msrv no_std
+        run: cargo check --no-default-features
