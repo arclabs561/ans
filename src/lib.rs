@@ -704,6 +704,241 @@ pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u3
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// 64-bit rANS (emits u32 words instead of bytes, higher precision)
+// ---------------------------------------------------------------------------
+
+/// Lower bound for the 64-bit rANS state. Renormalization emits 32-bit words
+/// to keep the state in `[RANS64_L, RANS64_L << 32)`.
+const RANS64_L: u64 = 1 << 31;
+
+/// A symbol-at-a-time 64-bit rANS encoder.
+///
+/// Same interface as [`RansEncoder`] but uses a 64-bit state and emits
+/// 32-bit words during renormalization. Supports `precision_bits` up to 31,
+/// giving finer frequency resolution than the 32-bit variant.
+///
+/// The output format is **not** compatible with [`RansDecoder`]; use
+/// [`Rans64Decoder`] to decode.
+#[derive(Debug, Clone)]
+pub struct Rans64Encoder {
+    state: u64,
+    buf: Vec<u8>,
+}
+
+impl Rans64Encoder {
+    /// Create a new 64-bit encoder.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: RANS64_L,
+            buf: Vec::new(),
+        }
+    }
+
+    /// Create a new 64-bit encoder with pre-allocated buffer capacity.
+    #[must_use]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            state: RANS64_L,
+            buf: Vec::with_capacity(cap),
+        }
+    }
+
+    /// Encode a single symbol into the 64-bit rANS state.
+    ///
+    /// **Symbols must be fed in reverse message order.**
+    pub fn put(&mut self, sym: u32, table: &FrequencyTable) -> Result<(), AnsError> {
+        let sym_us = sym as usize;
+        if sym_us >= table.freqs.len() {
+            return Err(AnsError::InvalidSymbol {
+                symbol: sym,
+                alphabet_size: table.freqs.len(),
+            });
+        }
+        let freq = table.freqs[sym_us] as u64;
+        if freq == 0 {
+            return Err(AnsError::ZeroFrequency { symbol: sym });
+        }
+        let start = table.cdf[sym_us] as u64;
+
+        // Renormalize: emit a u32 word to keep state small enough.
+        let x_max = ((RANS64_L >> table.precision_bits) << 32) * freq;
+        while self.state >= x_max {
+            self.buf
+                .extend_from_slice(&(self.state as u32).to_le_bytes());
+            self.state >>= 32;
+        }
+
+        let q = self.state / freq;
+        let r = self.state - q * freq;
+        self.state = (q << table.precision_bits) + r + start;
+        Ok(())
+    }
+
+    /// Finalize the encoder, writing the final state and returning the byte stream.
+    #[must_use]
+    pub fn finish(mut self) -> Vec<u8> {
+        self.buf.extend_from_slice(&self.state.to_le_bytes());
+        self.buf
+    }
+
+    /// Current rANS state (for bits-back interleaving).
+    #[inline]
+    #[must_use]
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+}
+
+impl Default for Rans64Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A symbol-at-a-time 64-bit rANS decoder.
+///
+/// Constructed from a byte stream produced by [`Rans64Encoder::finish`] or
+/// [`encode64`]. Decode symbols with [`get`](Rans64Decoder::get), or use the
+/// bits-back primitives [`peek`](Rans64Decoder::peek) +
+/// [`advance`](Rans64Decoder::advance).
+#[derive(Debug)]
+pub struct Rans64Decoder<'a> {
+    state: u64,
+    bytes: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Rans64Decoder<'a> {
+    /// Initialize a 64-bit decoder from an encoded byte stream.
+    ///
+    /// Returns an error if the stream is too short (< 8 bytes) or the
+    /// initial state is below `RANS64_L`.
+    pub fn new(bytes: &'a [u8]) -> Result<Self, AnsError> {
+        if bytes.len() < 8 {
+            return Err(AnsError::TruncatedInput {
+                available: bytes.len(),
+                needed: 8,
+            });
+        }
+        let cursor = bytes.len() - 8;
+        // unwrap: length check above guarantees exactly 8 bytes available
+        let state_bytes: [u8; 8] = bytes[cursor..cursor + 8].try_into().unwrap();
+        let state = u64::from_le_bytes(state_bytes);
+        if state < RANS64_L {
+            return Err(AnsError::InvalidState {
+                state: state as u32,
+                min_state: RANS64_L as u32,
+            });
+        }
+        Ok(Self {
+            state,
+            bytes,
+            cursor,
+        })
+    }
+
+    /// Decode a single symbol from the 64-bit rANS state.
+    pub fn get(&mut self, table: &FrequencyTable) -> Result<u32, AnsError> {
+        let sym = self.peek(table);
+        self.advance(sym, table)?;
+        Ok(sym)
+    }
+
+    /// Peek at the next symbol without advancing the state.
+    #[inline]
+    #[must_use]
+    pub fn peek(&self, table: &FrequencyTable) -> u32 {
+        debug_assert!(
+            self.state >= RANS64_L,
+            "peek called with invalid state {} (expected >= {RANS64_L})",
+            self.state
+        );
+        let slot = (self.state & (table.total as u64 - 1)) as usize;
+        debug_assert!(slot < table.sym_by_slot.len(), "slot {slot} out of range");
+        table.sym_by_slot[slot]
+    }
+
+    /// Advance the decoder state after a [`peek`](Rans64Decoder::peek).
+    pub fn advance(&mut self, sym: u32, table: &FrequencyTable) -> Result<(), AnsError> {
+        let mask = table.total as u64 - 1;
+        let slot = self.state & mask;
+        let sym_us = sym as usize;
+        if sym_us >= table.freqs.len() {
+            return Err(AnsError::InvalidSymbol {
+                symbol: sym,
+                alphabet_size: table.freqs.len(),
+            });
+        }
+        let freq = table.freqs[sym_us] as u64;
+        let start = table.cdf[sym_us] as u64;
+
+        self.state = freq * (self.state >> table.precision_bits) + (slot - start);
+
+        // Renormalize: pull u32 words while state < RANS64_L.
+        while self.state < RANS64_L {
+            if self.cursor < 4 {
+                return Err(AnsError::TruncatedInput {
+                    available: self.cursor,
+                    needed: 4,
+                });
+            }
+            self.cursor -= 4;
+            let word =
+                u32::from_le_bytes(self.bytes[self.cursor..self.cursor + 4].try_into().unwrap());
+            self.state = (self.state << 32) | (word as u64);
+        }
+        Ok(())
+    }
+
+    /// Current rANS state (for bits-back interleaving).
+    #[inline]
+    #[must_use]
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
+    /// Number of unread bytes remaining in the buffer.
+    #[inline]
+    #[must_use]
+    pub fn remaining_bytes(&self) -> usize {
+        self.cursor
+    }
+}
+
+/// Encode `symbols` using 64-bit rANS with the given frequency `table`.
+///
+/// # Example
+///
+/// ```
+/// use ans::{encode64, decode64, FrequencyTable};
+///
+/// let table = FrequencyTable::from_counts(&[3, 7], 12)?;
+/// let message = [0u32, 1, 1, 0];
+/// let bytes = encode64(&message, &table)?;
+/// let recovered = decode64(&bytes, &table, message.len())?;
+/// assert_eq!(recovered, message);
+/// # Ok::<(), ans::AnsError>(())
+/// ```
+pub fn encode64(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsError> {
+    let mut enc = Rans64Encoder::with_capacity(symbols.len());
+    for &sym in symbols.iter().rev() {
+        enc.put(sym, table)?;
+    }
+    Ok(enc.finish())
+}
+
+/// Decode `len` symbols from a 64-bit rANS byte stream produced by [`encode64`].
+pub fn decode64(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u32>, AnsError> {
+    let mut dec = Rans64Decoder::new(bytes)?;
+    let mut out = Vec::with_capacity(len);
+    for _ in 0..len {
+        out.push(dec.get(table)?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1323,6 +1558,98 @@ mod tests {
                 prev_remaining
             );
             prev_remaining = dec.remaining_bytes();
+        }
+    }
+
+    // --- 64-bit rANS tests ---
+
+    #[test]
+    fn rans64_roundtrip() {
+        let counts = [1u32, 2, 3, 4];
+        let table = FrequencyTable::from_counts(&counts, 12).unwrap();
+        let symbols = vec![0u32, 1, 2, 3, 2, 2, 1, 0, 3];
+        let enc = encode64(&symbols, &table).unwrap();
+        let dec = decode64(&enc, &table, symbols.len()).unwrap();
+        assert_eq!(symbols, dec);
+    }
+
+    #[test]
+    fn rans64_streaming_roundtrip() {
+        let counts = [3u32, 7];
+        let table = FrequencyTable::from_counts(&counts, 12).unwrap();
+        let message = vec![0u32, 1, 1, 0, 1];
+
+        let mut enc = Rans64Encoder::new();
+        for &sym in message.iter().rev() {
+            enc.put(sym, &table).unwrap();
+        }
+        let bytes = enc.finish();
+
+        let mut dec = Rans64Decoder::new(&bytes).unwrap();
+        let mut decoded = Vec::new();
+        for _ in 0..message.len() {
+            decoded.push(dec.get(&table).unwrap());
+        }
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn rans64_peek_advance() {
+        let table = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let message = vec![0u32, 1, 1, 0, 1];
+        let bytes = encode64(&message, &table).unwrap();
+        let mut dec = Rans64Decoder::new(&bytes).unwrap();
+
+        for &expected in &message {
+            let sym = dec.peek(&table);
+            assert_eq!(sym, expected);
+            dec.advance(sym, &table).unwrap();
+        }
+    }
+
+    #[test]
+    fn rans64_large_message() {
+        let counts = [1u32, 2, 4, 8, 16, 32, 64, 128, 256, 512];
+        let table = FrequencyTable::from_counts(&counts, 14).unwrap();
+        let message: Vec<u32> = (0..10_000).map(|i| (i % 10) as u32).collect();
+        let bytes = encode64(&message, &table).unwrap();
+        let decoded = decode64(&bytes, &table, message.len()).unwrap();
+        assert_eq!(message, decoded);
+    }
+
+    #[test]
+    fn rans64_empty_message() {
+        let table = FrequencyTable::from_counts(&[5, 3, 2], 12).unwrap();
+        let bytes = encode64(&[], &table).unwrap();
+        // Should be exactly 8 bytes (the initial 64-bit state).
+        assert_eq!(bytes.len(), 8);
+        let decoded = decode64(&bytes, &table, 0).unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn rans64_single_symbol_alphabet() {
+        let table = FrequencyTable::from_counts(&[42], 10).unwrap();
+        let message = vec![0u32; 50];
+        let bytes = encode64(&message, &table).unwrap();
+        let decoded = decode64(&bytes, &table, message.len()).unwrap();
+        assert_eq!(message, decoded);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_rans64_roundtrip(
+            symbols in prop::collection::vec(0u32..256u32, 0..200),
+            counts in prop::collection::vec(1u32..100u32, 1..16),
+        ) {
+            let alphabet = counts.len().max(1);
+            let min_bits = (alphabet as f64).log2().ceil().max(1.0) as u32;
+            let precision_bits = min_bits.clamp(1, 20);
+            let table = FrequencyTable::from_counts(&counts, precision_bits).unwrap();
+            let symbols: Vec<u32> = symbols.into_iter().map(|s| s % (alphabet as u32)).collect();
+            let enc = encode64(&symbols, &table)?;
+            let dec = decode64(&enc, &table, symbols.len())?;
+            prop_assert_eq!(symbols, dec);
         }
     }
 }

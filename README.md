@@ -98,9 +98,26 @@ let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12)?;
 # Ok::<(), ans::AnsError>(())
 ```
 
+## 64-bit variant
+
+`Rans64Encoder`/`Rans64Decoder` (and batch helpers `encode64`/`decode64`) use a
+64-bit state and emit 32-bit words during renormalization. This gives finer
+frequency resolution and fewer renormalization steps per symbol -- the variant
+used by production codecs (JPEG XL, LZFSE).
+
+```rust
+use ans::{encode64, decode64, FrequencyTable};
+
+let table = FrequencyTable::from_counts(&[3, 7], 14)?;
+let bytes = encode64(&[0u32, 1, 1, 0], &table)?;
+let back = decode64(&bytes, &table, 4)?;
+assert_eq!(back, &[0, 1, 1, 0]);
+# Ok::<(), ans::AnsError>(())
+```
+
 ## `no_std`
 
-This crate has zero dependencies and is `no_std`-compatible (requires `alloc`).
+Zero dependencies. `no_std`-compatible (requires `alloc`). Builds on `wasm32-unknown-unknown`.
 
 ## Notes
 
