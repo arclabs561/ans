@@ -6,6 +6,9 @@
 
 Asymmetric numeral systems entropy coding.
 
+Pure Rust, `no_std`-compatible, with streaming primitives (`peek`/`advance`)
+for bits-back coding (BB-ANS, ROC).
+
 ## Batch API
 
 ```rust
@@ -65,6 +68,36 @@ dec.advance(sym, &table)?;        // advance after external logic
 # Ok::<(), ans::AnsError>(())
 ```
 
+## Building frequency tables
+
+From integer counts (quantized internally):
+
+```rust
+use ans::FrequencyTable;
+
+let table = FrequencyTable::from_counts(&[10, 20, 70], 14)?;
+# Ok::<(), ans::AnsError>(())
+```
+
+From floating-point probabilities (e.g. neural network output):
+
+```rust
+use ans::FrequencyTable;
+
+let table = FrequencyTable::from_float_probs(&[0.1, 0.2, 0.7], 14)?;
+# Ok::<(), ans::AnsError>(())
+```
+
+From pre-normalized frequencies (skip internal quantization):
+
+```rust
+use ans::FrequencyTable;
+
+// Frequencies must sum to exactly 2^precision_bits.
+let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12)?;
+# Ok::<(), ans::AnsError>(())
+```
+
 ## `no_std`
 
 This crate is `no_std` by default (requires `alloc`). The `std` feature is enabled
@@ -72,7 +105,7 @@ by default for convenience but can be disabled:
 
 ```toml
 [dependencies]
-ans = { version = "0.1.3", default-features = false }
+ans = { version = "0.1.4", default-features = false }
 ```
 
 ## Notes

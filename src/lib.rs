@@ -75,7 +75,10 @@ const RANS_L: u32 = 1 << 23;
 pub enum AnsError {
     /// `precision_bits` was outside the valid range `1..=20`.
     #[error("invalid precision_bits={precision_bits} (must be in 1..=20)")]
-    InvalidPrecision { precision_bits: u32 },
+    InvalidPrecision {
+        /// The invalid precision value.
+        precision_bits: u32,
+    },
 
     /// The counts slice passed to [`FrequencyTable::from_counts`] was empty.
     #[error("empty frequency table")]
@@ -83,11 +86,19 @@ pub enum AnsError {
 
     /// A symbol index exceeded the alphabet size during encoding.
     #[error("invalid symbol {symbol} for alphabet size {alphabet_size}")]
-    InvalidSymbol { symbol: u32, alphabet_size: usize },
+    InvalidSymbol {
+        /// The out-of-range symbol.
+        symbol: u32,
+        /// The alphabet size of the table.
+        alphabet_size: usize,
+    },
 
     /// A symbol with zero frequency was encountered during encoding.
     #[error("frequency for symbol {symbol} is zero")]
-    ZeroFrequency { symbol: u32 },
+    ZeroFrequency {
+        /// The zero-frequency symbol.
+        symbol: u32,
+    },
 
     /// The frequency normalization step could not produce a valid table.
     #[error("frequency table normalization failed: {0}")]
@@ -95,7 +106,12 @@ pub enum AnsError {
 
     /// The rANS state read from the byte stream was below `RANS_L`.
     #[error("invalid rANS state {state} (expected >= {min_state})")]
-    InvalidState { state: u32, min_state: u32 },
+    InvalidState {
+        /// The invalid state value.
+        state: u32,
+        /// The minimum valid state (`RANS_L`).
+        min_state: u32,
+    },
 
     /// The byte stream was shorter than expected during decoding.
     #[error("truncated input ({available} bytes available, need at least {needed})")]
@@ -228,6 +244,99 @@ impl FrequencyTable {
         })
     }
 
+    /// Build a table from already-normalized frequencies that sum to `2^precision_bits`.
+    ///
+    /// Unlike [`from_counts`](Self::from_counts), this skips the scaling/normalization
+    /// step. The caller is responsible for ensuring the frequencies sum to exactly
+    /// `2^precision_bits` and that every entry is non-negative.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `precision_bits` is outside `1..=20`
+    /// - `freqs` is empty
+    /// - the frequencies do not sum to `2^precision_bits`
+    pub fn from_normalized(freqs: &[u32], precision_bits: u32) -> Result<Self, AnsError> {
+        if !(1..=20).contains(&precision_bits) {
+            return Err(AnsError::InvalidPrecision { precision_bits });
+        }
+        if freqs.is_empty() {
+            return Err(AnsError::EmptyAlphabet);
+        }
+        let total = 1u32 << precision_bits;
+        let sum: u32 = freqs.iter().sum();
+        if sum != total {
+            return Err(AnsError::InvalidTable(format!(
+                "frequencies sum to {sum}, expected {total}"
+            )));
+        }
+
+        let freqs = freqs.to_vec();
+        let mut cdf = vec![0u32; freqs.len() + 1];
+        for i in 0..freqs.len() {
+            cdf[i + 1] = cdf[i] + freqs[i];
+        }
+
+        let mut sym_by_slot = vec![0u32; total as usize];
+        for sym in 0..freqs.len() {
+            let start = cdf[sym] as usize;
+            let end = cdf[sym + 1] as usize;
+            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
+                *slot = sym as u32;
+            }
+        }
+
+        Ok(Self {
+            precision_bits,
+            total,
+            freqs,
+            cdf,
+            sym_by_slot,
+        })
+    }
+
+    /// Build a table from floating-point probabilities.
+    ///
+    /// Each entry in `probs` should be non-negative. The values are normalized
+    /// to sum to 1, then quantized to integer frequencies summing to
+    /// `2^precision_bits`. Every symbol with a positive probability is guaranteed
+    /// at least frequency 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `precision_bits` is outside `1..=20`
+    /// - `probs` is empty
+    /// - all probabilities are zero or negative
+    pub fn from_float_probs(probs: &[f32], precision_bits: u32) -> Result<Self, AnsError> {
+        if !(1..=20).contains(&precision_bits) {
+            return Err(AnsError::InvalidPrecision { precision_bits });
+        }
+        if probs.is_empty() {
+            return Err(AnsError::EmptyAlphabet);
+        }
+
+        let sum: f64 = probs.iter().map(|&p| (p.max(0.0)) as f64).sum();
+        if sum == 0.0 {
+            return Err(AnsError::InvalidTable(
+                "all probabilities are zero or negative".to_string(),
+            ));
+        }
+
+        // Convert to integer counts scaled to a large range, then delegate
+        // to from_counts which handles the normalization and correction.
+        let scale = (1u64 << 30) as f64;
+        let counts: Vec<u32> = probs
+            .iter()
+            .map(|&p| {
+                let p = (p.max(0.0)) as f64 / sum;
+                (p * scale).round().max(0.0) as u32
+            })
+            .collect();
+
+        Self::from_counts(&counts, precision_bits)
+    }
+
     /// The number of precision bits, i.e. `log2(total)`.
     #[inline]
     #[must_use]
@@ -272,6 +381,23 @@ impl FrequencyTable {
     #[must_use]
     pub fn symbol_at_slot(&self, slot: u32) -> Option<u32> {
         self.sym_by_slot.get(slot as usize).copied()
+    }
+
+    /// The normalized frequency for every symbol as a slice (length = alphabet size).
+    #[inline]
+    #[must_use]
+    pub fn freqs(&self) -> &[u32] {
+        &self.freqs
+    }
+
+    /// The cumulative distribution function as a slice (length = alphabet size + 1).
+    ///
+    /// `cdf[0]` is always 0 and `cdf[alphabet_size]` equals [`total()`](Self::total).
+    /// The frequency interval for symbol `s` is `cdf[s]..cdf[s+1]`.
+    #[inline]
+    #[must_use]
+    pub fn cdf(&self) -> &[u32] {
+        &self.cdf
     }
 }
 
@@ -440,6 +566,11 @@ impl<'a> RansDecoder<'a> {
     #[inline]
     #[must_use]
     pub fn peek(&self, table: &FrequencyTable) -> u32 {
+        debug_assert!(
+            self.state >= RANS_L,
+            "peek called with invalid state {} (expected >= {RANS_L})",
+            self.state
+        );
         let slot = (self.state & (table.total - 1)) as usize;
         debug_assert!(slot < table.sym_by_slot.len(), "slot {slot} out of range");
         table.sym_by_slot[slot]
@@ -967,6 +1098,98 @@ mod tests {
                         "symbol {} had count {} but freq 0", i, c);
                 }
             }
+        }
+    }
+
+    // --- from_normalized tests ---
+
+    #[test]
+    fn from_normalized_roundtrip() {
+        // Build via from_counts, extract freqs, rebuild via from_normalized.
+        let table1 = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let table2 =
+            FrequencyTable::from_normalized(table1.freqs(), table1.precision_bits()).unwrap();
+        assert_eq!(table1.freqs(), table2.freqs());
+        assert_eq!(table1.cdf(), table2.cdf());
+
+        // Roundtrip through both tables must produce identical bytes.
+        let message = [0u32, 1, 1, 0, 1];
+        let bytes1 = encode(&message, &table1).unwrap();
+        let bytes2 = encode(&message, &table2).unwrap();
+        assert_eq!(bytes1, bytes2);
+    }
+
+    #[test]
+    fn from_normalized_rejects_wrong_sum() {
+        let err = FrequencyTable::from_normalized(&[100, 200], 12).unwrap_err();
+        assert!(matches!(err, AnsError::InvalidTable(_)));
+    }
+
+    #[test]
+    fn from_normalized_rejects_empty() {
+        let err = FrequencyTable::from_normalized(&[], 12).unwrap_err();
+        assert!(matches!(err, AnsError::EmptyAlphabet));
+    }
+
+    // --- from_float_probs tests ---
+
+    #[test]
+    fn from_float_probs_roundtrip() {
+        let table = FrequencyTable::from_float_probs(&[0.3, 0.7], 12).unwrap();
+        assert_eq!(table.alphabet_size(), 2);
+        assert_eq!(table.freqs().iter().sum::<u32>(), table.total());
+
+        let message = [0u32, 1, 1, 0, 1, 0, 1, 1];
+        let bytes = encode(&message, &table).unwrap();
+        let decoded = decode(&bytes, &table, message.len()).unwrap();
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn from_float_probs_uniform() {
+        let table = FrequencyTable::from_float_probs(&[1.0, 1.0, 1.0, 1.0], 12).unwrap();
+        // Each symbol should get ~1024 out of 4096.
+        for i in 0..4 {
+            let f = table.freq(i).unwrap();
+            assert!(
+                (1020..=1028).contains(&f),
+                "freq[{i}] = {f}, expected ~1024"
+            );
+        }
+    }
+
+    #[test]
+    fn from_float_probs_with_zeros() {
+        // Zero-probability symbols should get freq 0 (via from_counts behavior).
+        let table = FrequencyTable::from_float_probs(&[0.0, 0.5, 0.5], 12).unwrap();
+        assert_eq!(table.freq(0).unwrap(), 0);
+        assert!(table.freq(1).unwrap() > 0);
+        assert!(table.freq(2).unwrap() > 0);
+    }
+
+    #[test]
+    fn from_float_probs_rejects_all_zero() {
+        let err = FrequencyTable::from_float_probs(&[0.0, 0.0], 12).unwrap_err();
+        assert!(matches!(err, AnsError::InvalidTable(_)));
+    }
+
+    // --- slice accessor tests ---
+
+    #[test]
+    fn freqs_and_cdf_accessors() {
+        let table = FrequencyTable::from_counts(&[10, 20, 30], 12).unwrap();
+        let freqs = table.freqs();
+        let cdf = table.cdf();
+
+        assert_eq!(freqs.len(), 3);
+        assert_eq!(cdf.len(), 4);
+        assert_eq!(cdf[0], 0);
+        assert_eq!(*cdf.last().unwrap(), table.total());
+        assert_eq!(freqs.iter().sum::<u32>(), table.total());
+
+        // CDF is prefix sum of freqs.
+        for i in 0..freqs.len() {
+            assert_eq!(cdf[i + 1], cdf[i] + freqs[i]);
         }
     }
 
