@@ -5,11 +5,24 @@
 //! compression schemes (e.g. “bits-back” constructions used in ROC / set coding).
 //!
 //! ## Design
-//! - **Explicit model**: callers provide counts (frequencies) and the precision.
+//! - **Explicit model**: callers provide counts, floats, or pre-normalized frequencies.
 //! - **Batch and streaming**: [`encode`]/[`decode`] for one-shot use,
 //!   [`RansEncoder`]/[`RansDecoder`] for symbol-at-a-time control.
-//! - **No I/O**: this crate is pure in-memory coding.
-//! - **`no_std`**: works without `std` (requires `alloc`).
+//! - **32-bit and 64-bit**: [`Rans64Encoder`]/[`Rans64Decoder`] emit u32 words
+//!   for finer precision (the variant used by JPEG XL, LZFSE).
+//! - **Bits-back**: [`RansDecoder::peek`]/[`RansDecoder::advance`] decompose
+//!   decoding for BB-ANS and ROC constructions.
+//! - **`no_std`**: zero dependencies, works without `std` (requires `alloc`).
+//!
+//! ## Not this
+//! - **Not a compression framework**: no file I/O, no adaptive models, no
+//!   pipeline orchestration. Use [`constriction`](https://docs.rs/constriction)
+//!   if you need a full entropy coding toolkit.
+//! - **Not tANS / FSE**: this crate implements rANS only. tANS (used by zstd)
+//!   has different table construction and performance characteristics.
+//! - **Not speed-optimized**: no SIMD, no interleaved streams. Correct and
+//!   easy to integrate.
+//! - **Not encryption**: an entropy coder is not a cryptographic primitive.
 //!
 //! ## Batch example
 //!

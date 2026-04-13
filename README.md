@@ -4,10 +4,7 @@
 [![Documentation](https://docs.rs/ans/badge.svg)](https://docs.rs/ans)
 [![CI](https://github.com/arclabs561/ans/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/ans/actions/workflows/ci.yml)
 
-Asymmetric numeral systems entropy coding.
-
-Pure Rust, `no_std`-compatible, with streaming primitives (`peek`/`advance`)
-for bits-back coding (BB-ANS, ROC).
+rANS entropy coding with bits-back primitives. `no_std`, zero dependencies.
 
 ## Batch API
 
@@ -121,28 +118,9 @@ Zero dependencies. `no_std`-compatible (requires `alloc`). Builds on `wasm32-unk
 
 ## Notes
 
-- Encoding returns a byte vector in a **stack format**: decoding consumes bytes from the end.
-- This crate is focused on correctness and integration simplicity (not maximum throughput).
-
-### Choosing `precision_bits`
-
-`FrequencyTable::from_counts(counts, precision_bits)` builds a model with total mass
-\(T = 2^{precision\_bits}\). Practical guidance:
-
-- Larger `precision_bits` approximates the empirical distribution more closely (less quantization),
-  but increases memory and can slow decoding.
-- Typical ranges are ~12–16 for small alphabets.
-
-### Memory footprint
-
-The table stores `sym_by_slot` of length \(T\), mapping each slot to a symbol. This dominates:
-
-- Approx size \(\approx 4 \cdot 2^{precision\_bits}\) bytes (u32 per slot), plus `cdf`/`freqs`.
-- Example: `precision_bits = 14` → \(2^{14} = 16384\) slots → ~64 KiB for `sym_by_slot`.
-
-### Security / robustness
-
-This is an entropy coder, not encryption. Do not treat it as a cryptographic primitive.
+- Encoding returns a byte vector in **stack format**: decoding consumes bytes from the end.
+- `precision_bits` sets the frequency resolution ($T = 2^p$). Typical range: 12-16.
+  The table allocates ~$4 \cdot 2^p$ bytes for the slot lookup.
 
 ## License
 

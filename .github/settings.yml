@@ -2,7 +2,7 @@
 # https://github.com/repository-settings/app
 
 repository:
-  description: "Asymmetric numeral systems entropy coding"
+  description: "rANS entropy coding with bits-back primitives"
   homepage: "https://docs.rs/ans"
   private: false
   has_issues: true
@@ -16,7 +16,9 @@ repository:
 
   topics:
     - ans
-    - compression
-    - entropy-coding
     - rans
+    - entropy-coding
+    - compression
+    - bits-back
+    - no-std
     - rust

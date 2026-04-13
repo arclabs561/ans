@@ -3,13 +3,13 @@ name = "ans"
 version = "0.2.0"
 authors = ["Arc <attobop@gmail.com>"]
 edition = "2021"
-description = "Asymmetric Numeral Systems: near-optimal entropy coding primitives."
+description = "rANS entropy coding with bits-back primitives. no_std, zero dependencies."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arclabs561/ans"
 homepage = "https://github.com/arclabs561/ans"
 documentation = "https://docs.rs/ans"
 readme = "README.md"
-keywords = ["ans", "entropy-coding", "compression"]
+keywords = ["ans", "rans", "entropy-coding", "compression", "bits-back"]
 categories = ["compression", "algorithms"]
 
 [workspace]
