@@ -794,16 +794,14 @@ mod tests {
     proptest! {
         #[test]
         fn prop_rans_roundtrip(
-            precision_bits in 1u32..21,
             symbols in prop::collection::vec(0u32..256u32, 0..200),
-            counts in prop::collection::vec(1u32..100u32, 1..32),
+            counts in prop::collection::vec(1u32..100u32, 1..16),
         ) {
             let alphabet = counts.len().max(1);
-            // Skip when total < alphabet (e.g. precision_bits=1, 3 symbols).
-            let table = match FrequencyTable::from_counts(&counts, precision_bits) {
-                Ok(t) => t,
-                Err(_) => { return Ok(()); }
-            };
+            // Ensure precision_bits is large enough for the alphabet.
+            let min_bits = (alphabet as f64).log2().ceil().max(1.0) as u32;
+            let precision_bits = min_bits.clamp(1, 20);
+            let table = FrequencyTable::from_counts(&counts, precision_bits).unwrap();
             let symbols: Vec<u32> = symbols.into_iter().map(|s| s % (alphabet as u32)).collect();
             let enc = encode(&symbols, &table)?;
             let dec = decode(&enc, &table, symbols.len())?;
@@ -1146,24 +1144,36 @@ mod tests {
     proptest! {
         #[test]
         fn prop_frequency_table_cdf_invariants(
-            precision_bits in 1u32..21,
-            counts in prop::collection::vec(1u32..100u32, 1..32),
+            // Include zero-count symbols in the mix.
+            counts in prop::collection::vec(0u32..100u32, 1..16),
         ) {
-            let table = match FrequencyTable::from_counts(&counts, precision_bits) {
-                Ok(t) => t,
-                Err(_) => { return Ok(()); }
+            // Need at least one nonzero count.
+            if counts.iter().all(|&c| c == 0) { return Ok(()); }
+            let min_bits = {
+                let nonzero = counts.iter().filter(|&&c| c > 0).count();
+                (nonzero as f64).log2().ceil().max(1.0) as u32
             };
+            let precision_bits = min_bits.clamp(1, 20);
+            let table = FrequencyTable::from_counts(&counts, precision_bits).unwrap();
+
             // Frequencies sum to total
-            let sum: u32 = (0..table.alphabet_size())
-                .map(|i| table.freq(i as u32).unwrap())
-                .sum();
+            let sum: u32 = table.freqs().iter().sum();
             prop_assert_eq!(sum, table.total());
-            // Every nonzero-count symbol has freq >= 1
+
+            // Every nonzero-count symbol has freq >= 1; zero-count has freq == 0
             for (i, &c) in counts.iter().enumerate() {
+                let f = table.freq(i as u32).unwrap();
                 if c > 0 {
-                    prop_assert!(table.freq(i as u32).unwrap() >= 1,
-                        "symbol {} had count {} but freq 0", i, c);
+                    prop_assert!(f >= 1, "symbol {} had count {} but freq 0", i, c);
+                } else {
+                    prop_assert_eq!(f, 0, "symbol {} had count 0 but freq {}", i, f);
                 }
+            }
+
+            // CDF is consistent with freqs
+            let cdf = table.cdf();
+            for i in 0..table.alphabet_size() {
+                prop_assert_eq!(cdf[i + 1] - cdf[i], table.freq(i as u32).unwrap());
             }
         }
     }
