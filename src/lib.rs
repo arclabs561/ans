@@ -171,26 +171,19 @@ impl FrequencyTable {
         // Fix sum to exactly total by adjusting the largest frequencies.
         let mut cur_sum: i64 = freqs.iter().map(|&f| f as i64).sum();
         let target: i64 = total as i64;
-        if cur_sum == 0 {
-            return Err(AnsError::InvalidTable(format!(
-                "normalization produced zero total for {} symbols (precision_bits={precision_bits})",
-                counts.len()
-            )));
-        }
+        // Safety: sum > 0 was checked above, so at least one symbol has count > 0
+        // and therefore freq >= 1 after the zero-floor correction.
+        debug_assert!(
+            cur_sum > 0,
+            "cur_sum should be > 0 after zero-floor correction"
+        );
 
         // We adjust greedily; correctness > optimality.
         while cur_sum != target {
             if cur_sum < target {
                 // add one to the max-count symbol
-                let (idx, _) = counts
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|&(_, &c)| c)
-                    .ok_or_else(|| {
-                        AnsError::InvalidTable(format!(
-                            "no symbols available to increment (cur_sum={cur_sum}, target={target})"
-                        ))
-                    })?;
+                // unwrap: counts is non-empty (checked at function entry)
+                let (idx, _) = counts.iter().enumerate().max_by_key(|&(_, &c)| c).unwrap();
                 freqs[idx] += 1;
                 cur_sum += 1;
             } else {
@@ -218,13 +211,12 @@ impl FrequencyTable {
         for i in 0..freqs.len() {
             cdf[i + 1] = cdf[i] + freqs[i];
         }
-        if cdf.last().copied().unwrap_or(0) != total {
-            return Err(AnsError::InvalidTable(format!(
-                "cdf total mismatch: got {}, expected {}",
-                cdf.last().copied().unwrap_or(0),
-                total
-            )));
-        }
+        // The correction loop guarantees cur_sum == target, so the CDF must match.
+        debug_assert_eq!(
+            cdf.last().copied().unwrap_or(0),
+            total,
+            "cdf total mismatch after correction loop"
+        );
 
         let mut sym_by_slot = vec![0u32; total as usize];
         for sym in 0..freqs.len() {
@@ -519,13 +511,8 @@ impl<'a> RansDecoder<'a> {
             });
         }
         let cursor = bytes.len() - 4;
-        let state_bytes: [u8; 4] =
-            bytes[cursor..cursor + 4]
-                .try_into()
-                .map_err(|_| AnsError::TruncatedInput {
-                    available: bytes.len(),
-                    needed: 4,
-                })?;
+        // unwrap: length check above guarantees exactly 4 bytes available
+        let state_bytes: [u8; 4] = bytes[cursor..cursor + 4].try_into().unwrap();
         let state = u32::from_le_bytes(state_bytes);
         if state < RANS_L {
             return Err(AnsError::InvalidState {
@@ -922,6 +909,26 @@ mod tests {
     }
 
     #[test]
+    fn encode_zero_frequency_symbol() {
+        // Table with a zero-count symbol: [5, 0, 3] -> symbol 1 has freq=0.
+        let table = FrequencyTable::from_counts(&[5, 0, 3], 12).unwrap();
+        assert_eq!(table.freq(1).unwrap(), 0);
+        let mut enc = RansEncoder::new();
+        let err = enc.put(1, &table).unwrap_err();
+        assert!(matches!(err, AnsError::ZeroFrequency { symbol: 1 }));
+    }
+
+    #[test]
+    fn decode_beyond_message_length() {
+        let table = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let message = [0u32, 1];
+        let bytes = encode(&message, &table).unwrap();
+        // Decoding more symbols than encoded should eventually error.
+        let err = decode(&bytes, &table, 100).unwrap_err();
+        assert!(matches!(err, AnsError::TruncatedInput { .. }));
+    }
+
+    #[test]
     fn batch_decode_zero_symbols() {
         let table = FrequencyTable::from_counts(&[5, 3, 2], 12).unwrap();
         // A valid 4-byte state (RANS_L in little-endian).
@@ -1009,33 +1016,47 @@ mod tests {
     }
 
     #[test]
-    fn bits_back_simulation() {
-        // Simulate bits-back: encode with one model, peek+advance with another
-        let model_a = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
-        let model_b = FrequencyTable::from_counts(&[5, 5], 12).unwrap();
+    fn bits_back_cross_model() {
+        // Bits-back: decode from a "prior" model to extract latents,
+        // then re-encode under a "posterior" model. The posterior encoding
+        // must round-trip back through a posterior decode.
+        let prior = FrequencyTable::from_counts(&[1, 1], 12).unwrap();
+        let posterior = FrequencyTable::from_counts(&[8, 2], 12).unwrap();
 
-        // Encode a message with model_a
-        let message = [0u32, 1, 1, 0, 1, 0, 1, 1];
-        let bytes = encode(&message, &model_a).unwrap();
+        // Seed the state with some symbols under an arbitrary model.
+        let seed_model = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let seed = [1u32, 0, 1, 1, 0, 1, 0, 0];
+        let seed_bytes = encode(&seed, &seed_model).unwrap();
 
-        // Decode first 4 symbols with model_a, peek the 5th with model_b
-        let mut dec = RansDecoder::new(&bytes).unwrap();
-        for (i, &expected) in message.iter().take(4).enumerate() {
-            let sym = dec.get(&model_a).unwrap();
-            assert_eq!(sym, expected, "mismatch at position {i}");
+        // Decode latent samples from the prior (bits-back "free bits" step).
+        let mut dec = RansDecoder::new(&seed_bytes).unwrap();
+        let mut latents = Vec::new();
+        for _ in 0..3 {
+            let z = dec.peek(&prior);
+            dec.advance(z, &prior).unwrap();
+            latents.push(z);
+            assert!(z < prior.alphabet_size() as u32);
         }
 
-        // Peek with model_b -- different model, different symbol interpretation
-        let slot_b = dec.state() & (model_b.total() - 1);
-        let sym_b = model_b.symbol_at_slot(slot_b).unwrap();
-        // Just verify it doesn't panic and returns a valid symbol
-        assert!(sym_b < model_b.alphabet_size() as u32);
-
-        // Continue decoding with model_a
-        for (i, &expected) in message.iter().skip(4).enumerate() {
-            let sym = dec.get(&model_a).unwrap();
-            assert_eq!(sym, expected, "mismatch at position {}", i + 4);
+        // Encode the same latents under the posterior.
+        let mut enc = RansEncoder::new();
+        for &z in latents.iter().rev() {
+            enc.put(z, &posterior).unwrap();
         }
+        let posterior_bytes = enc.finish();
+
+        // Decode from posterior must recover the same latents.
+        let mut dec2 = RansDecoder::new(&posterior_bytes).unwrap();
+        let mut recovered = Vec::new();
+        for _ in 0..3 {
+            let z = dec2.peek(&posterior);
+            dec2.advance(z, &posterior).unwrap();
+            recovered.push(z);
+        }
+        assert_eq!(
+            latents, recovered,
+            "posterior decode must recover prior-decoded latents"
+        );
     }
 
     #[test]
@@ -1072,6 +1093,12 @@ mod tests {
 
         // Out-of-range returns None
         assert!(table.freq(table.alphabet_size() as u32).is_none());
+        // cum_freq(alphabet_size) is the valid final CDF entry (== total)
+        assert_eq!(
+            table.cum_freq(table.alphabet_size() as u32),
+            Some(table.total())
+        );
+        // One past that is out of range
         assert!(table.cum_freq((table.alphabet_size() + 1) as u32).is_none());
         assert!(table.symbol_at_slot(table.total()).is_none());
     }
