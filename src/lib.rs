@@ -67,9 +67,8 @@
 //! ```
 //!
 //! ## Notes
-//! - This is not tuned for maximum speed; it is meant to be correct and easy to integrate.
-//! - Encoding returns a byte vector in a **stack format**: the decoder consumes bytes from
-//!   the end (LIFO). This avoids reversing buffers.
+//! - Encoding returns a byte vector in **stack format**: the decoder consumes bytes from
+//!   the end (LIFO).
 
 #![no_std]
 #![warn(missing_docs)]
@@ -112,12 +111,12 @@ pub enum AnsError {
     /// The frequency normalization step could not produce a valid table.
     InvalidTable(String),
 
-    /// The rANS state read from the byte stream was below `RANS_L`.
+    /// The rANS state read from the byte stream was below the lower bound.
     InvalidState {
-        /// The invalid state value.
-        state: u32,
-        /// The minimum valid state (`RANS_L`).
-        min_state: u32,
+        /// The invalid state value (truncated to u32 for the 64-bit variant).
+        state: u64,
+        /// The minimum valid state (`RANS_L` or `RANS64_L`).
+        min_state: u64,
     },
 
     /// The byte stream was shorter than expected during decoding.
@@ -151,7 +150,10 @@ impl fmt::Display for AnsError {
             }
             Self::InvalidTable(msg) => write!(f, "frequency table normalization failed: {msg}"),
             Self::InvalidState { state, min_state } => {
-                write!(f, "invalid rANS state {state} (expected >= {min_state})")
+                write!(
+                    f,
+                    "invalid rANS state 0x{state:x} (expected >= 0x{min_state:x})"
+                )
             }
             Self::TruncatedInput { available, needed } => {
                 write!(
@@ -248,34 +250,14 @@ impl FrequencyTable {
             }
         }
 
-        // Build CDF and slot -> symbol lookup.
-        let mut cdf = vec![0u32; freqs.len() + 1];
-        for i in 0..freqs.len() {
-            cdf[i + 1] = cdf[i] + freqs[i];
-        }
-        // The correction loop guarantees cur_sum == target, so the CDF must match.
+        // The correction loop guarantees cur_sum == target.
         debug_assert_eq!(
-            cdf.last().copied().unwrap_or(0),
-            total,
-            "cdf total mismatch after correction loop"
+            freqs.iter().map(|&f| f as i64).sum::<i64>(),
+            target,
+            "freq sum mismatch after correction loop"
         );
 
-        let mut sym_by_slot = vec![0u32; total as usize];
-        for sym in 0..freqs.len() {
-            let start = cdf[sym] as usize;
-            let end = cdf[sym + 1] as usize;
-            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
-                *slot = sym as u32;
-            }
-        }
-
-        Ok(Self {
-            precision_bits,
-            total,
-            freqs,
-            cdf,
-            sym_by_slot,
-        })
+        Ok(Self::build_lookups(freqs, precision_bits, total))
     }
 
     /// Build a table from already-normalized frequencies that sum to `2^precision_bits`.
@@ -305,28 +287,7 @@ impl FrequencyTable {
             )));
         }
 
-        let freqs = freqs.to_vec();
-        let mut cdf = vec![0u32; freqs.len() + 1];
-        for i in 0..freqs.len() {
-            cdf[i + 1] = cdf[i] + freqs[i];
-        }
-
-        let mut sym_by_slot = vec![0u32; total as usize];
-        for sym in 0..freqs.len() {
-            let start = cdf[sym] as usize;
-            let end = cdf[sym + 1] as usize;
-            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
-                *slot = sym as u32;
-            }
-        }
-
-        Ok(Self {
-            precision_bits,
-            total,
-            freqs,
-            cdf,
-            sym_by_slot,
-        })
+        Ok(Self::build_lookups(freqs.to_vec(), precision_bits, total))
     }
 
     /// Build a table from floating-point probabilities.
@@ -371,6 +332,31 @@ impl FrequencyTable {
             .collect();
 
         Self::from_counts(&counts, precision_bits)
+    }
+
+    /// Build CDF and slot-lookup from validated frequencies.
+    fn build_lookups(freqs: Vec<u32>, precision_bits: u32, total: u32) -> Self {
+        let mut cdf = vec![0u32; freqs.len() + 1];
+        for i in 0..freqs.len() {
+            cdf[i + 1] = cdf[i] + freqs[i];
+        }
+
+        let mut sym_by_slot = vec![0u32; total as usize];
+        for sym in 0..freqs.len() {
+            let start = cdf[sym] as usize;
+            let end = cdf[sym + 1] as usize;
+            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
+                *slot = sym as u32;
+            }
+        }
+
+        Self {
+            precision_bits,
+            total,
+            freqs,
+            cdf,
+            sym_by_slot,
+        }
     }
 
     /// The number of precision bits, i.e. `log2(total)`.
@@ -560,8 +546,8 @@ impl<'a> RansDecoder<'a> {
         let state = u32::from_le_bytes(state_bytes);
         if state < RANS_L {
             return Err(AnsError::InvalidState {
-                state,
-                min_state: RANS_L,
+                state: state as u64,
+                min_state: RANS_L as u64,
             });
         }
         Ok(Self {
@@ -841,8 +827,8 @@ impl<'a> Rans64Decoder<'a> {
         let state = u64::from_le_bytes(state_bytes);
         if state < RANS64_L {
             return Err(AnsError::InvalidState {
-                state: state as u32,
-                min_state: RANS64_L as u32,
+                state,
+                min_state: RANS64_L,
             });
         }
         Ok(Self {
