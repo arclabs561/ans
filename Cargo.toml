@@ -19,4 +19,4 @@ categories = ["compression", "algorithms"]
 
 [dev-dependencies]
 proptest = "1.5"
-fingerprints = "0.1"
+fingerprints = "0.2"
