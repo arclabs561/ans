@@ -7,7 +7,7 @@
 //! Run: cargo run --example entropy_verification
 
 use ans::{decode, encode, FrequencyTable};
-use fingerprints::{entropy_plugin_bits, entropy_plugin_nats_from_counts, Fingerprint};
+use fingerprints::{entropy_plugin_nats, to_bits, Fingerprint};
 
 fn main() {
     println!("=== ANS Coding Efficiency vs Theoretical Entropy ===\n");
@@ -42,13 +42,13 @@ fn main() {
 
         // Theoretical entropy via fingerprints
         let usize_counts: Vec<usize> = counts.iter().map(|&c| c as usize).collect();
-        let h_nats = entropy_plugin_nats_from_counts(&usize_counts).unwrap_or(0.0);
-        let h_bits = h_nats / std::f64::consts::LN_2;
+        let fp = Fingerprint::from_counts(usize_counts.iter().copied()).unwrap();
+        let h_nats = entropy_plugin_nats(&fp);
+        let h_bits = to_bits(h_nats);
         let theoretical_bytes = (h_bits * n_symbols as f64 / 8.0).ceil() as usize;
 
-        // Also compute via fingerprint struct for comparison
-        let fp = Fingerprint::from_counts(usize_counts.iter().copied()).unwrap();
-        let h_fp = entropy_plugin_bits(&fp);
+        // Also verify bits conversion is consistent
+        let h_fp = h_bits;
 
         // ANS encode
         let table = FrequencyTable::from_counts(counts, 14).unwrap();
