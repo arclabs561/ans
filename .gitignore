@@ -6,3 +6,4 @@
 .cursor/
 .cursorrules
 .cursorignore
+Cargo.lock
