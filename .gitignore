@@ -7,3 +7,5 @@
 .cursorrules
 .cursorignore
 Cargo.lock
+
+.claude/settings.local.json
