@@ -9,3 +9,6 @@
 Cargo.lock
 
 .claude/settings.local.json
+
+# cargo-semver-checks-action scratch dir (publish workflow)
+/semver-checks/
