@@ -1,3 +1,9 @@
+//! Lossless compression entry point: round-trip a message through the batch
+//! encode/decode API and the symbol-at-a-time streaming API. The starting point
+//! for any rANS use, from file compression to the inner loop of a neural codec.
+//!
+//! Run: `cargo run --example basic`
+
 use ans::{decode, encode, FrequencyTable, RansDecoder, RansEncoder};
 
 fn main() -> Result<(), ans::AnsError> {
