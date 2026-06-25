@@ -127,6 +127,14 @@ Zero dependencies. `no_std`-compatible (requires `alloc`). Builds on `wasm32-unk
 - `precision_bits` sets the frequency resolution ($T = 2^p$). Typical range: 12-16.
   The table allocates ~$4 \cdot 2^p$ bytes for the slot lookup.
 
+## Examples
+
+Runnable examples live in [`examples/`](examples/):
+
+- `basic` round-trips a message through the batch encode/decode API.
+- `bits_back` demonstrates bits-back coding (BB-ANS): spending free bits from the decoder state to encode prior information.
+- `entropy_verification` measures how close ANS gets to the theoretical Shannon entropy bound (computed via fingerprints).
+
 ## License
 
 MIT OR Apache-2.0
