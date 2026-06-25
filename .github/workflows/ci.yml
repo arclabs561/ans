@@ -19,6 +19,11 @@ jobs:
         run: cargo check --all-targets
       - name: test
         run: cargo test
+      - name: run example assertions
+        run: |
+          cargo run --example basic
+          cargo run --example bits_back
+          cargo run --example entropy_verification
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
