@@ -129,11 +129,8 @@ Zero dependencies. `no_std`-compatible (requires `alloc`). Builds on `wasm32-unk
 
 ## Examples
 
-Runnable examples live in [`examples/`](examples/):
-
-- `basic` round-trips a message through the batch encode/decode API, the entry point for general-purpose lossless compression.
-- `bits_back` demonstrates bits-back coding (BB-ANS), the technique behind neural and latent-variable-model compression where free bits from the decoder state encode the prior.
-- `entropy_verification` measures how close ANS gets to the Shannon entropy bound (computed via fingerprints), the check that confirms a coder is near-optimal.
+See [examples/README.md](examples/README.md) for runnable examples with
+captured output.
 
 ## License
 
