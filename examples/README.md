@@ -55,6 +55,7 @@ Encoder state after seed: 16872765
   latent[3]: decoded z=1 from prior
   latent[4]: decoded z=1 from prior
 
+After prior decodes: state=134980868, remaining_bytes=0
 Posterior encoding: 5 bytes
 
 --- Bits-back decode ---
@@ -65,6 +66,9 @@ Posterior encoding: 5 bytes
   latent[4]: decoded z=1 from posterior
 
 Recovered latents match originals.
+
+Bits used (posterior only): 40
+Bits used (naive, same):   40
 In a full BB-ANS pipeline, the prior-decode step extracts ~1.0 free bits per latent
 ```
 
@@ -89,6 +93,9 @@ cargo run --release --example entropy_verification
   Highly skewed        |   0.0986 |    10115 |        125 |        128 | +0.0026
   Binary (90/10)       |   0.4690 |     1000 |         59 |         62 | +0.0270
   Near-deterministic   |   0.0015 |    10000 |          2 |          5 | +0.0025
+
+  Redundancy = (ANS bits/sym) - H(X). Closer to 0 = better.
+  Negative values possible due to rounding (integer bytes).
 ```
 
 Redundancy is extra bits per symbol beyond entropy. Values near zero mean the
