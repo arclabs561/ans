@@ -60,27 +60,18 @@ fn main() -> Result<(), AnsError> {
         println!("  latent[{i}]: decoded z={z} from prior");
     }
 
-    // Now re-encode: the decoder consumed bytes, leaving a residual state.
-    // We rebuild an encoder from the decoder's residual state and remaining bytes,
-    // then encode the latents under the posterior.
-    //
-    // In practice, BB-ANS implementations interleave these operations on a
-    // single state. Here we demonstrate the principle with separate passes.
+    // Now re-encode on the same stack: the decoder consumed bytes, leaving a
+    // residual state plus any unread prefix bytes.
     let remaining = dec.remaining_bytes();
     let dec_state = dec.state();
     println!("\nAfter prior decodes: state={dec_state}, remaining_bytes={remaining}");
 
-    // Reconstruct encoder state from decoder state.
-    // The decoder state IS a valid encoder state (ANS is a bijection).
-    let mut enc2 = RansEncoder::new();
-    // We need to rebuild from the decoder's perspective. For this demo,
-    // we encode the latents under the posterior into a fresh encoder,
-    // then combine with the residual.
+    let mut enc2 = dec.into_encoder();
     for &z in latent_samples.iter().rev() {
         enc2.put(z, &posterior)?;
     }
     let posterior_bytes = enc2.finish();
-    println!("Posterior encoding: {} bytes", posterior_bytes.len());
+    println!("Posterior stack: {} bytes", posterior_bytes.len());
 
     // --- Bits-back decode step ---
     // To recover: decode from posterior, then encode back into prior.
@@ -98,6 +89,13 @@ fn main() -> Result<(), AnsError> {
     assert_eq!(recovered, latent_samples);
     println!("\nRecovered latents match originals.");
 
+    let mut prior_enc = dec2.into_encoder();
+    for &z in recovered.iter().rev() {
+        prior_enc.put(z, &prior)?;
+    }
+    assert_eq!(prior_enc.finish(), midpoint_bytes);
+    println!("Recovered seed stack matches original.");
+
     // --- Verify the information-theoretic property ---
     // With uniform prior (1 bit each) and posterior [0.8, 0.2] (~0.72 bits each),
     // bits-back should save ~0.28 bits per latent vs naive posterior coding.
@@ -110,8 +108,8 @@ fn main() -> Result<(), AnsError> {
         }
         naive_enc.finish().len() as f64 * 8.0
     };
-    println!("\nBits used (posterior only): {posterior_bits:.0}");
-    println!("Bits used (naive, same):   {naive_bits:.0}");
+    println!("\nBits used (same stack):     {posterior_bits:.0}");
+    println!("Bits used (posterior only): {naive_bits:.0}");
     println!(
         "In a full BB-ANS pipeline, the prior-decode step extracts ~{:.1} free bits per latent",
         1.0 // H(uniform prior) = 1 bit

@@ -36,7 +36,7 @@ peek+advance: 0 2 1 2 2 0
 ### `bits_back`: what does BB-ANS do with prior and posterior models?
 
 Uses a two-symbol prior and posterior to show the bits-back pattern: decode
-latents from the prior, then encode them under the posterior.
+latents from the prior, then encode them under the posterior on the same stack.
 
 ```bash
 cargo run --release --example bits_back
@@ -56,7 +56,7 @@ Encoder state after seed: 16872765
   latent[4]: decoded z=1 from prior
 
 After prior decodes: state=134980868, remaining_bytes=0
-Posterior encoding: 5 bytes
+Posterior stack: 5 bytes
 
 --- Bits-back decode ---
   latent[0]: decoded z=0 from posterior
@@ -66,9 +66,10 @@ Posterior encoding: 5 bytes
   latent[4]: decoded z=1 from posterior
 
 Recovered latents match originals.
+Recovered seed stack matches original.
 
+Bits used (same stack):     40
 Bits used (posterior only): 40
-Bits used (naive, same):   40
 In a full BB-ANS pipeline, the prior-decode step extracts ~1.0 free bits per latent
 ```
 

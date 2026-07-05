@@ -77,10 +77,16 @@ extern crate alloc;
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use core::fmt;
 
-/// Lower bound for the rANS state. Encoding emits bytes to keep the state
-/// below `RANS_L << 8`; decoding pulls bytes to bring the state back above
-/// `RANS_L`.
-const RANS_L: u32 = 1 << 23;
+/// Lower bound for the 32-bit rANS state.
+///
+/// Encoding emits bytes to keep the state below
+/// `RANS32_LOWER_BOUND << 8`; decoding pulls bytes to bring the state back
+/// above this value. Downstream codecs that need wire-format compatibility with
+/// this crate's 32-bit rANS stream can use this constant instead of copying an
+/// internal value.
+pub const RANS32_LOWER_BOUND: u32 = 1 << 23;
+
+const RANS_L: u32 = RANS32_LOWER_BOUND;
 
 /// Errors for rANS operations.
 #[derive(Debug, PartialEq, Eq)]
@@ -644,6 +650,31 @@ impl<'a> RansDecoder<'a> {
     pub fn remaining_bytes(&self) -> usize {
         self.cursor
     }
+
+    /// Convert the residual decoder stack back into an encoder.
+    ///
+    /// This preserves the decoder's current state and unread byte prefix. It is
+    /// the handoff needed for bits-back pipelines: decode one or more symbols
+    /// from a model, call `into_encoder`, then encode symbols under the next
+    /// model on the same ANS stack.
+    ///
+    /// # Validity
+    ///
+    /// Call this only while the decoder is in a valid state. If the most recent
+    /// [`advance`](Self::advance) or [`get`](Self::get) returned an error, the
+    /// state may be partially updated and should not be reused.
+    #[must_use]
+    pub fn into_encoder(self) -> RansEncoder {
+        debug_assert!(
+            self.state >= RANS_L,
+            "into_encoder called with invalid state {} (expected >= {RANS_L})",
+            self.state
+        );
+        RansEncoder {
+            state: self.state,
+            buf: self.bytes[..self.cursor].to_vec(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,9 +738,13 @@ pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u3
 // 64-bit rANS (emits u32 words instead of bytes, higher precision)
 // ---------------------------------------------------------------------------
 
-/// Lower bound for the 64-bit rANS state. Renormalization emits 32-bit words
-/// to keep the state in `[RANS64_L, RANS64_L << 32)`.
-const RANS64_L: u64 = 1 << 31;
+/// Lower bound for the 64-bit rANS state.
+///
+/// Renormalization emits 32-bit words to keep the state in
+/// `[RANS64_LOWER_BOUND, RANS64_LOWER_BOUND << 32)`.
+pub const RANS64_LOWER_BOUND: u64 = 1 << 31;
+
+const RANS64_L: u64 = RANS64_LOWER_BOUND;
 
 /// A symbol-at-a-time 64-bit rANS encoder.
 ///
@@ -903,6 +938,23 @@ impl<'a> Rans64Decoder<'a> {
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         self.cursor
+    }
+
+    /// Convert the residual decoder stack back into a 64-bit encoder.
+    ///
+    /// Preserves the decoder's current state and unread byte prefix for
+    /// bits-back interleaving. Call only after successful decoder operations.
+    #[must_use]
+    pub fn into_encoder(self) -> Rans64Encoder {
+        debug_assert!(
+            self.state >= RANS64_L,
+            "into_encoder called with invalid state {} (expected >= {RANS64_L})",
+            self.state
+        );
+        Rans64Encoder {
+            state: self.state,
+            buf: self.bytes[..self.cursor].to_vec(),
+        }
     }
 }
 
@@ -1332,6 +1384,57 @@ mod tests {
     }
 
     #[test]
+    fn decoder_into_encoder_restores_consumed_symbols() {
+        let table = FrequencyTable::from_counts(&[3, 5, 8], 12).unwrap();
+        let message = [0u32, 2, 1, 2, 2, 0, 1];
+        let bytes = encode(&message, &table).unwrap();
+
+        let mut dec = RansDecoder::new(&bytes).unwrap();
+        let consumed = [dec.get(&table).unwrap(), dec.get(&table).unwrap()];
+
+        let mut enc = dec.into_encoder();
+        for &sym in consumed.iter().rev() {
+            enc.put(sym, &table).unwrap();
+        }
+
+        assert_eq!(enc.finish(), bytes);
+    }
+
+    #[test]
+    fn bits_back_can_reencode_on_same_stack() {
+        let prior = FrequencyTable::from_counts(&[1, 1], 12).unwrap();
+        let posterior = FrequencyTable::from_counts(&[8, 2], 12).unwrap();
+        let seed_model = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+        let seed = [1u32, 0, 1, 1, 0, 1, 0, 0];
+        let seed_bytes = encode(&seed, &seed_model).unwrap();
+
+        let mut dec = RansDecoder::new(&seed_bytes).unwrap();
+        let mut latents = Vec::new();
+        for _ in 0..3 {
+            latents.push(dec.get(&prior).unwrap());
+        }
+
+        let mut enc = dec.into_encoder();
+        for &z in latents.iter().rev() {
+            enc.put(z, &posterior).unwrap();
+        }
+        let posterior_bytes = enc.finish();
+
+        let mut posterior_dec = RansDecoder::new(&posterior_bytes).unwrap();
+        let mut recovered = Vec::new();
+        for _ in 0..3 {
+            recovered.push(posterior_dec.get(&posterior).unwrap());
+        }
+        assert_eq!(recovered, latents);
+
+        let mut prior_enc = posterior_dec.into_encoder();
+        for &z in recovered.iter().rev() {
+            prior_enc.put(z, &prior).unwrap();
+        }
+        assert_eq!(prior_enc.finish(), seed_bytes);
+    }
+
+    #[test]
     fn frequency_table_invariants() {
         let counts = [10u32, 20, 30, 40];
         let table = FrequencyTable::from_counts(&counts, 14).unwrap();
@@ -1570,6 +1673,23 @@ mod tests {
         let enc = encode64(&symbols, &table).unwrap();
         let dec = decode64(&enc, &table, symbols.len()).unwrap();
         assert_eq!(symbols, dec);
+    }
+
+    #[test]
+    fn rans64_decoder_into_encoder_restores_consumed_symbols() {
+        let table = FrequencyTable::from_counts(&[3, 5, 8], 20).unwrap();
+        let message = [0u32, 2, 1, 2, 2, 0, 1];
+        let bytes = encode64(&message, &table).unwrap();
+
+        let mut dec = Rans64Decoder::new(&bytes).unwrap();
+        let consumed = [dec.get(&table).unwrap(), dec.get(&table).unwrap()];
+
+        let mut enc = dec.into_encoder();
+        for &sym in consumed.iter().rev() {
+            enc.put(sym, &table).unwrap();
+        }
+
+        assert_eq!(enc.finish(), bytes);
     }
 
     #[test]

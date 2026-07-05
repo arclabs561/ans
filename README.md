@@ -58,7 +58,8 @@ assert_eq!(decoded, message);
 ### Bits-back primitives
 
 `RansDecoder::peek` and `RansDecoder::advance` allow inspecting the decoded slot
-before advancing state, which is the key operation for bits-back coding:
+before advancing state. `RansDecoder::into_encoder` preserves the residual stack
+so the caller can encode the next model on the same ANS state:
 
 ```rust
 # use ans::{RansEncoder, RansDecoder, FrequencyTable};
@@ -67,6 +68,8 @@ before advancing state, which is the key operation for bits-back coding:
 let mut dec = RansDecoder::new(&bytes)?;
 let sym = dec.peek(&table);       // look at slot without advancing
 dec.advance(sym, &table)?;        // advance after external logic
+let mut enc = dec.into_encoder();  // continue from the residual stack
+enc.put(sym, &table)?;
 # Ok::<(), ans::AnsError>(())
 ```
 
