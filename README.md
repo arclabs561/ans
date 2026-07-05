@@ -8,7 +8,7 @@ rANS entropy coding with bits-back primitives. `no_std`, zero dependencies.
 
 ```toml
 [dependencies]
-ans = "0.3"
+ans = "0.4"
 ```
 
 ## Batch API
