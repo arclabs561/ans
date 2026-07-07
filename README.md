@@ -2,9 +2,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/ans.svg)](https://crates.io/crates/ans)
 [![Documentation](https://docs.rs/ans/badge.svg)](https://docs.rs/ans)
-[![CI](https://github.com/arclabs561/ans/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/ans/actions/workflows/ci.yml)
 
-rANS entropy coding with bits-back primitives. `no_std`, zero dependencies.
+rANS entropy coding with bits-back primitives.
 
 ```toml
 [dependencies]
