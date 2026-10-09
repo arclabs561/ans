@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 //! Asymmetric Numeral Systems (ANS) entropy coding primitives.
 //!
 //! This crate provides a small, dependency-light implementation of **rANS**
@@ -9,7 +10,7 @@
 //! - **Batch and streaming**: [`encode`]/[`decode`] for one-shot use,
 //!   [`RansEncoder`]/[`RansDecoder`] for symbol-at-a-time control.
 //! - **32-bit and 64-bit**: [`Rans64Encoder`]/[`Rans64Decoder`] emit u32 words
-//!   for finer precision (the variant used by JPEG XL, LZFSE).
+//!   for finer frequency resolution and fewer renormalization steps.
 //! - **Bits-back**: [`RansDecoder::peek`]/[`RansDecoder::advance`] decompose
 //!   decoding for BB-ANS and ROC constructions.
 //! - **`no_std`**: zero dependencies, works without `std` (requires `alloc`).
@@ -727,7 +728,9 @@ pub fn encode(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsErr
 /// ```
 pub fn decode(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u32>, AnsError> {
     let mut dec = RansDecoder::new(bytes)?;
-    let mut out = Vec::with_capacity(len);
+    // `len` is caller input: bound the up-front reservation by the input
+    // size (the Vec still grows if a valid stream holds more symbols).
+    let mut out = Vec::with_capacity(len.min(bytes.len().saturating_mul(8)));
     for _ in 0..len {
         out.push(dec.get(table)?);
     }
@@ -983,7 +986,9 @@ pub fn encode64(symbols: &[u32], table: &FrequencyTable) -> Result<Vec<u8>, AnsE
 /// Decode `len` symbols from a 64-bit rANS byte stream produced by [`encode64`].
 pub fn decode64(bytes: &[u8], table: &FrequencyTable, len: usize) -> Result<Vec<u32>, AnsError> {
     let mut dec = Rans64Decoder::new(bytes)?;
-    let mut out = Vec::with_capacity(len);
+    // `len` is caller input: bound the up-front reservation by the input
+    // size (the Vec still grows if a valid stream holds more symbols).
+    let mut out = Vec::with_capacity(len.min(bytes.len().saturating_mul(8)));
     for _ in 0..len {
         out.push(dec.get(table)?);
     }

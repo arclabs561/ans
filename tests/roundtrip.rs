@@ -92,3 +92,15 @@ fn compression_beats_naive_on_compressible_input() {
     let recovered = decode(&bytes, &table, message.len()).unwrap();
     assert_eq!(recovered, message, "compressed bytes must round-trip");
 }
+
+/// `len` is caller input. A huge value must end in a truncation error when
+/// the stream runs out, not in a capacity-overflow panic or an allocation of
+/// `len` symbols before any byte is read.
+#[test]
+fn decode_with_a_huge_len_errors_instead_of_reserving_it() {
+    let table = ans::FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+    let bytes = ans::encode(&[0u32, 1], &table).unwrap();
+    assert!(ans::decode(&bytes, &table, usize::MAX).is_err());
+    let bytes64 = ans::encode64(&[0u32, 1], &table).unwrap();
+    assert!(ans::decode64(&bytes64, &table, usize::MAX).is_err());
+}
