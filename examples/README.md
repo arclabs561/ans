@@ -36,7 +36,8 @@ peek+advance: 0 2 1 2 2 0
 ### `bits_back`: what does BB-ANS do with prior and posterior models?
 
 Uses a two-symbol prior and posterior to show the bits-back pattern: decode
-latents from the prior, then encode them under the posterior on the same stack.
+latents from the posterior (borrowing bits from the stack), then encode them
+under the prior on the same stack.
 
 ```bash
 cargo run --release --example bits_back
@@ -49,28 +50,29 @@ Seed: encoded 8 symbols
 Encoder state after seed: 16872765
 
 --- Bits-back encode (5 latents) ---
-  latent[0]: decoded z=0 from prior
-  latent[1]: decoded z=1 from prior
-  latent[2]: decoded z=1 from prior
-  latent[3]: decoded z=1 from prior
-  latent[4]: decoded z=1 from prior
+  latent[0]: decoded z=0 from posterior
+  latent[1]: decoded z=0 from posterior
+  latent[2]: decoded z=1 from posterior
+  latent[3]: decoded z=0 from posterior
+  latent[4]: decoded z=0 from posterior
 
-After prior decodes: state=134980868, remaining_bytes=0
-Posterior stack: 5 bytes
+After posterior decodes: state=353814886, remaining_bytes=0
+Prior stack: 5 bytes
 
 --- Bits-back decode ---
-  latent[0]: decoded z=0 from posterior
-  latent[1]: decoded z=1 from posterior
-  latent[2]: decoded z=1 from posterior
-  latent[3]: decoded z=1 from posterior
-  latent[4]: decoded z=1 from posterior
+  latent[0]: decoded z=0 from prior
+  latent[1]: decoded z=0 from prior
+  latent[2]: decoded z=1 from prior
+  latent[3]: decoded z=0 from prior
+  latent[4]: decoded z=0 from prior
 
 Recovered latents match originals.
 Recovered seed stack matches original.
 
-Bits used (same stack):     40
-Bits used (posterior only): 40
-In a full BB-ANS pipeline, the prior-decode step extracts ~1.0 free bits per latent
+Bits popped under posterior: 3.61
+Bits pushed under prior:     5.00
+Net stack growth (ideal):    1.39 bits
+Stack bytes: 5 before, 5 after
 ```
 
 ## Entropy Check

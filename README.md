@@ -106,8 +106,8 @@ let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12)?;
 
 `Rans64Encoder`/`Rans64Decoder` (and batch helpers `encode64`/`decode64`) use a
 64-bit state and emit 32-bit words during renormalization. This gives finer
-frequency resolution and fewer renormalization steps per symbol -- the variant
-used by production codecs (JPEG XL, LZFSE).
+frequency resolution and fewer renormalization steps per symbol. (LZFSE uses
+tANS, a table-driven variant, not rANS.)
 
 ```rust
 use ans::{encode64, decode64, FrequencyTable};
