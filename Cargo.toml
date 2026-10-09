@@ -12,6 +12,7 @@ documentation = "https://docs.rs/ans"
 readme = "README.md"
 keywords = ["ans", "rans", "entropy-coding", "compression", "bits-back"]
 categories = ["compression", "algorithms"]
+include = ["/src", "/tests", "/examples", "/README.md", "/CHANGELOG.md", "/LICENSE*"]
 
 [workspace]
 
