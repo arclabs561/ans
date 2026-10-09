@@ -5,6 +5,10 @@
 
 rANS entropy coding with bits-back primitives.
 
+For a broader entropy-coding library (range coding, model adapters, Python
+bindings), use constriction; `ans` is a small zero-dependency `no_std` rANS
+crate with the decoder hooks bits-back coding needs.
+
 ```toml
 [dependencies]
 ans = "0.4"
@@ -16,14 +20,12 @@ ans = "0.4"
 use ans::{decode, encode, FrequencyTable};
 
 let counts = [10u32, 20, 70]; // A, B, C
-let table = FrequencyTable::from_counts(&counts, 14)?;
+let table = FrequencyTable::from_counts(&counts, 14).unwrap();
 let message = [0u32, 2, 1, 2, 2, 0];
 
-let bytes = encode(&message, &table)?;
-let back = decode(&bytes, &table, message.len())?;
+let bytes = encode(&message, &table).unwrap();
+let back = decode(&bytes, &table, message.len()).unwrap();
 assert_eq!(back, message);
-
-# Ok::<(), ans::AnsError>(())
 ```
 
 ## Streaming API
@@ -33,25 +35,23 @@ Symbol-at-a-time encoding/decoding. Required for bits-back coding (BB-ANS, ROC).
 ```rust
 use ans::{RansEncoder, RansDecoder, FrequencyTable};
 
-let table = FrequencyTable::from_counts(&[3, 7], 12)?;
+let table = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
 let message = [0u32, 1, 1, 0, 1];
 
 // Encode in reverse order (rANS requirement).
 let mut enc = RansEncoder::new();
 for &sym in message.iter().rev() {
-    enc.put(sym, &table)?;
+    enc.put(sym, &table).unwrap();
 }
 let bytes = enc.finish();
 
 // Decode in forward order.
-let mut dec = RansDecoder::new(&bytes)?;
+let mut dec = RansDecoder::new(&bytes).unwrap();
 let mut decoded = Vec::new();
 for _ in 0..message.len() {
-    decoded.push(dec.get(&table)?);
+    decoded.push(dec.get(&table).unwrap());
 }
 assert_eq!(decoded, message);
-
-# Ok::<(), ans::AnsError>(())
 ```
 
 ### Bits-back primitives
@@ -61,15 +61,16 @@ before advancing state. `RansDecoder::into_encoder` preserves the residual stack
 so the caller can encode the next model on the same ANS state:
 
 ```rust
-# use ans::{RansEncoder, RansDecoder, FrequencyTable};
-# let table = FrequencyTable::from_counts(&[3, 7], 12)?;
-# let bytes = ans::encode(&[0u32, 1], &table)?;
-let mut dec = RansDecoder::new(&bytes)?;
-let sym = dec.peek(&table);       // look at slot without advancing
-dec.advance(sym, &table)?;        // advance after external logic
-let mut enc = dec.into_encoder();  // continue from the residual stack
-enc.put(sym, &table)?;
-# Ok::<(), ans::AnsError>(())
+use ans::{RansDecoder, FrequencyTable};
+
+let table = FrequencyTable::from_counts(&[3, 7], 12).unwrap();
+let bytes = ans::encode(&[0u32, 1], &table).unwrap();
+
+let mut dec = RansDecoder::new(&bytes).unwrap();
+let sym = dec.peek(&table);         // look at slot without advancing
+dec.advance(sym, &table).unwrap();  // advance after external logic
+let mut enc = dec.into_encoder();   // continue from the residual stack
+enc.put(sym, &table).unwrap();
 ```
 
 ## Building frequency tables
@@ -79,8 +80,7 @@ From integer counts (quantized internally):
 ```rust
 use ans::FrequencyTable;
 
-let table = FrequencyTable::from_counts(&[10, 20, 70], 14)?;
-# Ok::<(), ans::AnsError>(())
+let table = FrequencyTable::from_counts(&[10, 20, 70], 14).unwrap();
 ```
 
 From floating-point probabilities (e.g. neural network output):
@@ -88,8 +88,7 @@ From floating-point probabilities (e.g. neural network output):
 ```rust
 use ans::FrequencyTable;
 
-let table = FrequencyTable::from_float_probs(&[0.1, 0.2, 0.7], 14)?;
-# Ok::<(), ans::AnsError>(())
+let table = FrequencyTable::from_float_probs(&[0.1, 0.2, 0.7], 14).unwrap();
 ```
 
 From pre-normalized frequencies (skip internal quantization):
@@ -98,8 +97,7 @@ From pre-normalized frequencies (skip internal quantization):
 use ans::FrequencyTable;
 
 // Frequencies must sum to exactly 2^precision_bits.
-let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12)?;
-# Ok::<(), ans::AnsError>(())
+let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12).unwrap();
 ```
 
 ## 64-bit variant
@@ -112,11 +110,10 @@ tANS, a table-driven variant, not rANS.)
 ```rust
 use ans::{encode64, decode64, FrequencyTable};
 
-let table = FrequencyTable::from_counts(&[3, 7], 14)?;
-let bytes = encode64(&[0u32, 1, 1, 0], &table)?;
-let back = decode64(&bytes, &table, 4)?;
+let table = FrequencyTable::from_counts(&[3, 7], 14).unwrap();
+let bytes = encode64(&[0u32, 1, 1, 0], &table).unwrap();
+let back = decode64(&bytes, &table, 4).unwrap();
 assert_eq!(back, &[0, 1, 1, 0]);
-# Ok::<(), ans::AnsError>(())
 ```
 
 ## `no_std`
