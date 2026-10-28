@@ -5,9 +5,11 @@
 
 rANS entropy coding with bits-back primitives.
 
-For a broader entropy-coding library (range coding, model adapters, Python
-bindings), use constriction; `ans` is a small zero-dependency `no_std` rANS
-crate with the decoder hooks bits-back coding needs.
+## Overview
+
+`ans` provides batch and streaming rANS encoders and decoders, including the
+decoder hooks needed for bits-back coding. It has no runtime dependencies and
+supports `no_std` with `alloc`.
 
 ```toml
 [dependencies]
@@ -103,9 +105,8 @@ let table = FrequencyTable::from_normalized(&[1024, 1024, 2048], 12).unwrap();
 ## 64-bit variant
 
 `Rans64Encoder`/`Rans64Decoder` (and batch helpers `encode64`/`decode64`) use a
-64-bit state and emit 32-bit words during renormalization. This gives finer
-frequency resolution and fewer renormalization steps per symbol. (LZFSE uses
-tANS, a table-driven variant, not rANS.)
+64-bit state and emit 32-bit words during renormalization. Both variants use
+the same `FrequencyTable`, which accepts precision from 1 to 20 bits.
 
 ```rust
 use ans::{encode64, decode64, FrequencyTable};
