@@ -287,8 +287,8 @@ impl FrequencyTable {
             return Err(AnsError::EmptyAlphabet);
         }
         let total = 1u32 << precision_bits;
-        let sum: u32 = freqs.iter().sum();
-        if sum != total {
+        let sum: u64 = freqs.iter().map(|&f| u64::from(f)).sum();
+        if sum != u64::from(total) {
             return Err(AnsError::InvalidTable(format!(
                 "frequencies sum to {sum}, expected {total}"
             )));
@@ -334,7 +334,9 @@ impl FrequencyTable {
                 let p = (p.max(0.0)) as f64 / sum;
                 // Use (x + 0.5) as u32 instead of round() for no_std compatibility.
                 let v = p * scale;
-                (if v > 0.0 { v + 0.5 } else { 0.0 }) as u32
+                // A positive probability below 2^-31 of the sum would round to
+                // count 0, which from_counts then keeps at freq 0. Floor it at 1.
+                (if v > 0.0 { (v + 0.5).max(1.0) } else { 0.0 }) as u32
             })
             .collect();
 
@@ -1550,6 +1552,13 @@ mod tests {
         assert!(matches!(err, AnsError::EmptyAlphabet));
     }
 
+    #[test]
+    fn from_normalized_rejects_overflowing_sum() {
+        // u32::MAX + 4097 wraps to 4096 = 2^12 in u32 arithmetic.
+        let err = FrequencyTable::from_normalized(&[u32::MAX, (1 << 12) + 1], 12).unwrap_err();
+        assert!(matches!(err, AnsError::InvalidTable(_)));
+    }
+
     // --- from_float_probs tests ---
 
     #[test]
@@ -1590,6 +1599,16 @@ mod tests {
     fn from_float_probs_rejects_all_zero() {
         let err = FrequencyTable::from_float_probs(&[0.0, 0.0], 12).unwrap_err();
         assert!(matches!(err, AnsError::InvalidTable(_)));
+    }
+
+    #[test]
+    fn from_float_probs_tiny_positive_gets_nonzero_freq() {
+        // 1e-10 of the sum is below the 2^-31 rounding step of the count scale.
+        let table = FrequencyTable::from_float_probs(&[1.0, 1e-10], 16).unwrap();
+        assert!(table.freq(1).unwrap() >= 1);
+        let message = [0u32, 1, 0];
+        let bytes = encode(&message, &table).unwrap();
+        assert_eq!(decode(&bytes, &table, message.len()).unwrap(), message);
     }
 
     // --- slice accessor tests ---
