@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `FrequencyTable::from_float_probs` gives every positive probability at least
+  frequency 1, as documented; probabilities below about 2^-31 of the sum (for
+  example the tail of a softmax) were rounded to 0 and could not be encoded.
+- `FrequencyTable::from_normalized` sums frequencies in u64, so an overflowing
+  sum is rejected instead of panicking in debug builds or wrapping to a valid
+  total in release builds.
+
 ## [0.4.0] - 2026-07-05
 
 ### Added

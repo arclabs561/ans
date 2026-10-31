@@ -104,3 +104,19 @@ fn decode_with_a_huge_len_errors_instead_of_reserving_it() {
     let bytes64 = ans::encode64(&[0u32, 1], &table).unwrap();
     assert!(ans::decode64(&bytes64, &table, usize::MAX).is_err());
 }
+
+/// Softmax output from a confident classifier: 256 logits spread over
+/// [-40, 0] at precision 14. Every symbol has positive probability, so every
+/// symbol must be encodable, including the rarest (p ~ 6e-19).
+#[test]
+fn roundtrip_float_probs_from_softmax() {
+    let logits: Vec<f64> = (0..256).map(|i| -40.0 * f64::from(i) / 255.0).collect();
+    let z: f64 = logits.iter().map(|l| l.exp()).sum();
+    let probs: Vec<f32> = logits.iter().map(|l| (l.exp() / z) as f32).collect();
+    let table = FrequencyTable::from_float_probs(&probs, 14).unwrap();
+    assert!((0..256).all(|s| table.freq(s).unwrap() >= 1));
+
+    let message = [0u32, 255, 128, 0];
+    let bytes = encode(&message, &table).unwrap();
+    assert_eq!(decode(&bytes, &table, message.len()).unwrap(), message);
+}
