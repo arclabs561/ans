@@ -8,8 +8,8 @@ rANS entropy coding with bits-back primitives.
 ## Overview
 
 `ans` provides batch and streaming rANS encoders and decoders, including the
-decoder hooks needed for bits-back coding. It has no runtime dependencies and
-supports `no_std` with `alloc`.
+decoder hooks needed for bits-back coding. It has no runtime dependencies,
+supports `no_std` with `alloc`, and builds on `wasm32-unknown-unknown`.
 
 ```toml
 [dependencies]
@@ -116,10 +116,6 @@ let bytes = encode64(&[0u32, 1, 1, 0], &table).unwrap();
 let back = decode64(&bytes, &table, 4).unwrap();
 assert_eq!(back, &[0, 1, 1, 0]);
 ```
-
-## `no_std`
-
-Zero dependencies. `no_std`-compatible (requires `alloc`). Builds on `wasm32-unknown-unknown`.
 
 ## Notes
 
