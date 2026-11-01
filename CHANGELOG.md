@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-01
+
 ### Fixed
 
+- `decode` and `decode64` cap their output reservation by the input size;
+  previously `len = usize::MAX` panicked with a capacity overflow and a large
+  `len` reserved that much memory before reading the stream.
 - `FrequencyTable::from_float_probs` gives every positive probability at least
   frequency 1, as documented; probabilities below about 2^-31 of the sum (for
   example the tail of a softmax) were rounded to 0 and could not be encoded.
