@@ -90,7 +90,10 @@ pub const RANS32_LOWER_BOUND: u32 = 1 << 23;
 const RANS_L: u32 = RANS32_LOWER_BOUND;
 
 /// Errors for rANS operations.
+///
+/// New variants may be added in minor releases; match with a wildcard arm.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnsError {
     /// `precision_bits` was outside the valid range `1..=20`.
     InvalidPrecision {
@@ -133,6 +136,15 @@ pub enum AnsError {
         /// Minimum bytes needed.
         needed: usize,
     },
+
+    /// `advance` was given a symbol whose frequency interval does not contain
+    /// the decoder's current slot (it is not the symbol `peek` returns).
+    SymbolMismatch {
+        /// The symbol passed to `advance`.
+        symbol: u32,
+        /// The current slot, `state mod total`.
+        slot: u32,
+    },
 }
 
 impl fmt::Display for AnsError {
@@ -166,6 +178,12 @@ impl fmt::Display for AnsError {
                 write!(
                     f,
                     "truncated input ({available} bytes available, need at least {needed})"
+                )
+            }
+            Self::SymbolMismatch { symbol, slot } => {
+                write!(
+                    f,
+                    "symbol {symbol} does not cover decoder slot {slot} (advance must get the peeked symbol)"
                 )
             }
         }
@@ -605,8 +623,13 @@ impl<'a> RansDecoder<'a> {
     /// Advance the decoder state after a [`peek`](RansDecoder::peek).
     ///
     /// `sym` must be the symbol returned by `peek` (or a valid symbol whose
-    /// frequency interval contains the current slot). Passing the wrong symbol
-    /// will silently corrupt the state.
+    /// frequency interval contains the current slot).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnsError::InvalidSymbol`] if `sym` is outside the alphabet and
+    /// [`AnsError::SymbolMismatch`] if its frequency interval does not contain
+    /// the current slot. In both cases the state is left unchanged.
     pub fn advance(&mut self, sym: u32, table: &FrequencyTable) -> Result<(), AnsError> {
         let mask = table.total - 1;
         let slot = self.state & mask;
@@ -619,12 +642,17 @@ impl<'a> RansDecoder<'a> {
         }
         let freq = table.freqs[sym_us];
         let start = table.cdf[sym_us];
+        // Wraps when slot < start, so one compare covers both sides.
+        let offset = slot.wrapping_sub(start);
+        if offset >= freq {
+            return Err(AnsError::SymbolMismatch { symbol: sym, slot });
+        }
 
         // Arithmetic safety: freq <= total <= 2^20, and (state >> precision_bits)
         // < 2^(32 - precision_bits) <= 2^31, so freq * (state >> precision_bits)
         // fits in u32 (max ~2^20 * 2^11 = 2^31 before renorm pushes state down).
-        // (slot - start) < freq <= total, so the addition cannot overflow.
-        self.state = freq * (self.state >> table.precision_bits) + (slot - start);
+        // offset < freq <= total, so the addition cannot overflow.
+        self.state = freq * (self.state >> table.precision_bits) + offset;
 
         // Renormalize: pull bytes while state < RANS_L.
         while self.state < RANS_L {
@@ -900,6 +928,12 @@ impl<'a> Rans64Decoder<'a> {
     }
 
     /// Advance the decoder state after a [`peek`](Rans64Decoder::peek).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnsError::InvalidSymbol`] if `sym` is outside the alphabet and
+    /// [`AnsError::SymbolMismatch`] if its frequency interval does not contain
+    /// the current slot. In both cases the state is left unchanged.
     pub fn advance(&mut self, sym: u32, table: &FrequencyTable) -> Result<(), AnsError> {
         let mask = table.total as u64 - 1;
         let slot = self.state & mask;
@@ -912,8 +946,17 @@ impl<'a> Rans64Decoder<'a> {
         }
         let freq = table.freqs[sym_us] as u64;
         let start = table.cdf[sym_us] as u64;
+        // Wraps when slot < start, so one compare covers both sides.
+        let offset = slot.wrapping_sub(start);
+        if offset >= freq {
+            return Err(AnsError::SymbolMismatch {
+                symbol: sym,
+                // slot < total <= 2^20.
+                slot: slot as u32,
+            });
+        }
 
-        self.state = freq * (self.state >> table.precision_bits) + (slot - start);
+        self.state = freq * (self.state >> table.precision_bits) + offset;
 
         // Renormalize: pull u32 words while state < RANS64_L.
         while self.state < RANS64_L {
@@ -1283,6 +1326,37 @@ mod tests {
                 alphabet_size: 2
             }
         ));
+    }
+
+    #[test]
+    fn advance_rejects_in_range_symbol_that_misses_the_slot() {
+        // freqs [8, 8]: symbol 0 covers slots 0..8, symbol 1 covers 8..16.
+        let table = FrequencyTable::from_counts(&[1, 1], 4).unwrap();
+        for (msg_sym, wrong) in [(0u32, 1u32), (1, 0)] {
+            let msg = [msg_sym; 4];
+
+            let bytes = encode(&msg, &table).unwrap();
+            let mut dec = RansDecoder::new(&bytes).unwrap();
+            assert_eq!(dec.peek(&table), msg_sym);
+            let before = dec.state();
+            let err = dec.advance(wrong, &table).unwrap_err();
+            assert!(
+                matches!(err, AnsError::SymbolMismatch { symbol, .. } if symbol == wrong),
+                "{err:?}"
+            );
+            assert_eq!(dec.state(), before, "state changed on error");
+            dec.advance(msg_sym, &table).unwrap();
+
+            let bytes = encode64(&msg, &table).unwrap();
+            let mut dec = Rans64Decoder::new(&bytes).unwrap();
+            assert_eq!(dec.peek(&table), msg_sym);
+            let err = dec.advance(wrong, &table).unwrap_err();
+            assert!(
+                matches!(err, AnsError::SymbolMismatch { symbol, .. } if symbol == wrong),
+                "64-bit: {err:?}"
+            );
+            dec.advance(msg_sym, &table).unwrap();
+        }
     }
 
     #[test]
