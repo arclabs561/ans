@@ -13,7 +13,7 @@ supports `no_std` with `alloc`, and builds on `wasm32-unknown-unknown`.
 
 ```toml
 [dependencies]
-ans = "0.4.1"
+ans = "0.5"
 ```
 
 ## Batch API
