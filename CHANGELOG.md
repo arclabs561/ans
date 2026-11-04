@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Breaking changes
+
+- `AnsError` is `#[non_exhaustive]`; exhaustive `match`es need a wildcard
+  arm.
+- `RansDecoder::advance` and `Rans64Decoder::advance` return the new
+  `AnsError::SymbolMismatch` when the symbol's frequency interval does not
+  contain the current slot, and leave the state unchanged. Before, a wrong
+  in-range symbol panicked on subtraction underflow in debug builds and
+  corrupted the state in release builds.
+
 ## [0.4.1] - 2026-11-01
 
 ### Fixed
