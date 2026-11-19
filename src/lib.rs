@@ -199,7 +199,8 @@ pub struct FrequencyTable {
     total: u32,
     freqs: Vec<u32>,
     cdf: Vec<u32>, // inclusive prefix sums: len = freqs.len() + 1, cdf[0]=0, cdf[last]=total
-    sym_by_slot: Vec<u32>, // length=total, maps slot -> symbol
+    // Binary tables use cdf[1] as the lookup threshold and leave this empty.
+    sym_by_slot: Vec<u32>,
 }
 
 impl FrequencyTable {
@@ -368,14 +369,15 @@ impl FrequencyTable {
             cdf[i + 1] = cdf[i] + freqs[i];
         }
 
-        let mut sym_by_slot = vec![0u32; total as usize];
-        for sym in 0..freqs.len() {
-            let start = cdf[sym] as usize;
-            let end = cdf[sym + 1] as usize;
-            for slot in sym_by_slot.iter_mut().take(end).skip(start) {
-                *slot = sym as u32;
+        let sym_by_slot = if freqs.len() == 2 {
+            Vec::new()
+        } else {
+            let mut slots = vec![0; total as usize];
+            for (sym, range) in cdf.windows(2).enumerate() {
+                slots[range[0] as usize..range[1] as usize].fill(sym as u32);
             }
-        }
+            slots
+        };
 
         Self {
             precision_bits,
@@ -429,7 +431,17 @@ impl FrequencyTable {
     #[inline]
     #[must_use]
     pub fn symbol_at_slot(&self, slot: u32) -> Option<u32> {
-        self.sym_by_slot.get(slot as usize).copied()
+        (slot < self.total).then(|| self.lookup_slot(slot))
+    }
+
+    /// Resolve a slot known to be in `0..total`.
+    #[inline]
+    fn lookup_slot(&self, slot: u32) -> u32 {
+        if self.sym_by_slot.is_empty() {
+            u32::from(slot >= self.cdf[1])
+        } else {
+            self.sym_by_slot[slot as usize]
+        }
     }
 
     /// The normalized frequency for every symbol as a slice (length = alphabet size).
@@ -615,9 +627,8 @@ impl<'a> RansDecoder<'a> {
             "peek called with invalid state {} (expected >= {RANS_L})",
             self.state
         );
-        let slot = (self.state & (table.total - 1)) as usize;
-        debug_assert!(slot < table.sym_by_slot.len(), "slot {slot} out of range");
-        table.sym_by_slot[slot]
+        let slot = self.state & (table.total - 1);
+        table.lookup_slot(slot)
     }
 
     /// Advance the decoder state after a [`peek`](RansDecoder::peek).
@@ -922,9 +933,8 @@ impl<'a> Rans64Decoder<'a> {
             "peek called with invalid state {} (expected >= {RANS64_L})",
             self.state
         );
-        let slot = (self.state & (table.total as u64 - 1)) as usize;
-        debug_assert!(slot < table.sym_by_slot.len(), "slot {slot} out of range");
-        table.sym_by_slot[slot]
+        let slot = (self.state & (table.total as u64 - 1)) as u32;
+        table.lookup_slot(slot)
     }
 
     /// Advance the decoder state after a [`peek`](Rans64Decoder::peek).
@@ -1513,6 +1523,25 @@ mod tests {
             prior_enc.put(z, &prior).unwrap();
         }
         assert_eq!(prior_enc.finish(), seed_bytes);
+    }
+
+    #[test]
+    fn binary_tables_resolve_every_slot_without_a_dense_lookup() {
+        for split in 0..=16 {
+            let table = FrequencyTable::from_normalized(&[split, 16 - split], 4).unwrap();
+            assert_eq!(table.sym_by_slot.capacity(), 0);
+            for slot in 0..16 {
+                assert_eq!(table.symbol_at_slot(slot), Some(u32::from(slot >= split)));
+            }
+            assert_eq!(table.symbol_at_slot(16), None);
+            assert_eq!(table.symbol_at_slot(u32::MAX), None);
+
+            let symbols: Vec<u32> = (0..16).map(|slot| u32::from(slot >= split)).collect();
+            let bytes = encode(&symbols, &table).unwrap();
+            assert_eq!(decode(&bytes, &table, symbols.len()).unwrap(), symbols);
+            let bytes = encode64(&symbols, &table).unwrap();
+            assert_eq!(decode64(&bytes, &table, symbols.len()).unwrap(), symbols);
+        }
     }
 
     #[test]
