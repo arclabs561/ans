@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Normalize frequency counts without scanning the full alphabet for each
+  rounding correction. The normalized tables and encoded bytes are unchanged.
+
 ## [0.5.1] - 2026-11-19
 
 ### Changed
