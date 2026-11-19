@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-19
+
+### Changed
+
+- Two-symbol frequency tables decode each slot with a single comparison,
+  saving four bytes per slot when constructing a table.
+
 ## [0.5.0] - 2026-11-04
 
 ### Breaking changes
