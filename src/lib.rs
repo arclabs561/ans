@@ -239,7 +239,7 @@ impl FrequencyTable {
         }
 
         // Fix sum to exactly total by adjusting the largest frequencies.
-        let mut cur_sum: i64 = freqs.iter().map(|&f| f as i64).sum();
+        let cur_sum: i64 = freqs.iter().map(|&f| f as i64).sum();
         let target: i64 = total as i64;
         // Safety: sum > 0 was checked above, so at least one symbol has count > 0
         // and therefore freq >= 1 after the zero-floor correction.
@@ -248,39 +248,56 @@ impl FrequencyTable {
             "cur_sum should be > 0 after zero-floor correction"
         );
 
-        // We adjust greedily; correctness > optimality.
-        while cur_sum != target {
-            if cur_sum < target {
-                // add one to the max-count symbol
-                // unwrap: counts is non-empty (checked at function entry)
-                let (idx, _) = counts.iter().enumerate().max_by_key(|&(_, &c)| c).unwrap();
-                freqs[idx] += 1;
-                cur_sum += 1;
-            } else {
-                // subtract one from a symbol with freq > 1 (prefer largest freq)
-                let mut best: Option<(usize, u32)> = None;
-                for (i, &f) in freqs.iter().enumerate() {
-                    if f > 1 && best.map(|(_, bf)| f > bf).unwrap_or(true) {
-                        best = Some((i, f));
-                    }
+        if cur_sum < target {
+            // max_by_key picks the last tied maximum. Every missing slot goes there.
+            let idx = counts
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, &c)| c)
+                .unwrap()
+                .0;
+            freqs[idx] += (target - cur_sum) as u32;
+        } else if cur_sum > target {
+            // Lower the highest frequencies to a common ceiling. Choose the
+            // smallest ceiling whose capped sum still reaches the target.
+            let mut low = 1;
+            let mut high = *freqs.iter().max().unwrap();
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let capped: i64 = freqs.iter().map(|&f| i64::from(f.min(mid))).sum();
+                if capped < target {
+                    low = mid + 1;
+                } else {
+                    high = mid;
                 }
-                let Some((idx, _)) = best else {
-                    return Err(AnsError::InvalidTable(format!(
-                        "cannot reduce total (cur_sum={cur_sum}, target={target}): \
-                         all {} symbols have freq<=1",
-                        freqs.len()
-                    )));
-                };
-                freqs[idx] -= 1;
-                cur_sum -= 1;
+            }
+            let ceiling = low;
+            let mut capped = 0;
+            for f in &mut freqs {
+                *f = (*f).min(ceiling);
+                capped += i64::from(*f);
+            }
+            if ceiling == 1 && capped > target {
+                return Err(AnsError::InvalidTable(format!(
+                    "cannot reduce total (cur_sum={capped}, target={target}): \
+                     all {} symbols have freq<=1",
+                    freqs.len()
+                )));
+            }
+            // One last pass resolves ties in the original symbol order.
+            for f in freqs
+                .iter_mut()
+                .filter(|f| **f == ceiling)
+                .take((capped - target) as usize)
+            {
+                *f -= 1;
             }
         }
 
-        // The correction loop guarantees cur_sum == target.
         debug_assert_eq!(
             freqs.iter().map(|&f| f as i64).sum::<i64>(),
             target,
-            "freq sum mismatch after correction loop"
+            "frequency sum mismatch after correction"
         );
 
         Ok(Self::build_lookups(freqs, precision_bits, total))
@@ -1542,6 +1559,28 @@ mod tests {
             let bytes = encode64(&symbols, &table).unwrap();
             assert_eq!(decode64(&bytes, &table, symbols.len()).unwrap(), symbols);
         }
+    }
+
+    #[test]
+    fn count_corrections_preserve_the_stream_frequency_model() {
+        // A deficit goes entirely to the last tied maximum count.
+        let deficit = FrequencyTable::from_counts(&[0, 1, 1, 1, 1, 1], 3).unwrap();
+        assert_eq!(deficit.freqs(), &[0, 1, 1, 1, 1, 4]);
+
+        // The top three scale to 5, 5, 4. After the floor for rare symbols
+        // we must remove six slots, from indices 1, 2, 1, 2, 3, 1 in order.
+        let excess =
+            FrequencyTable::from_counts(&[0, 99, 98, 91, 1, 1, 1, 1, 1, 1, 1, 1], 4).unwrap();
+        assert_eq!(excess.freqs(), &[0, 2, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1]);
+
+        let full = FrequencyTable::from_counts(&[99, 1, 1, 1], 2).unwrap();
+        assert_eq!(full.freqs(), &[1, 1, 1, 1]);
+        assert_eq!(
+            FrequencyTable::from_counts(&[0, 9, 1, 1, 1, 1], 2).unwrap_err(),
+            AnsError::InvalidTable(
+                "cannot reduce total (cur_sum=5, target=4): all 6 symbols have freq<=1".into()
+            )
+        );
     }
 
     #[test]
